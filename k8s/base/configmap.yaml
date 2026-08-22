@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nova-gps-config
+  namespace: nova-gps
+data:
+  ENVIRONMENT: production
+  KAFKA_BROKER: kafka:9092
+  KAFKA_TOPIC: nova.locations
+  MQTT_BROKER: mosquitto:1883
+  CORS_ORIGINS: https://gps.example.com
+  SANDBOX_EXECUTOR_MODE: mock
+  RETENTION_DAYS: "365"
+  RATE_LIMIT_PER_MINUTE: "120"

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NOVA Location Event",
+  "type": "object",
+  "required": ["event", "device_id", "device_type", "latitude", "longitude", "source", "recorded_at", "received_at"],
+  "properties": {
+    "event": { "const": "location.updated" },
+    "device_id": { "type": "string" },
+    "device_type": { "enum": ["vehicle", "motorcycle", "phone", "laptop", "other"] },
+    "latitude": { "type": "number", "minimum": -90, "maximum": 90 },
+    "longitude": { "type": "number", "minimum": -180, "maximum": 180 },
+    "speed": { "type": ["number", "null"] },
+    "heading": { "type": ["number", "null"], "minimum": 0, "maximum": 360 },
+    "source": { "type": "string" },
+    "recorded_at": { "type": "string", "format": "date-time" },
+    "received_at": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": true
+}

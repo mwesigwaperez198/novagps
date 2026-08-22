@@ -1,0 +1,39 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: nova-api
+  namespace: nova-gps
+spec:
+  minReplicas: 3
+  maxReplicas: 12
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: nova-api
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 65
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: nova-worker
+  namespace: nova-gps
+spec:
+  minReplicas: 2
+  maxReplicas: 10
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: nova-worker
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

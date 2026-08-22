@@ -1,0 +1,107 @@
+name: nova-gps-ci
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: pytest -q
+      - run: ruff check .
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm install
+      - run: npm run build
+
+  containers:
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        if: github.event_name == 'push'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: backend
+          push: ${{ github.event_name == 'push' }}
+          tags: ghcr.io/novara-team/nova-gps-api:${{ github.sha }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: frontend
+          push: ${{ github.event_name == 'push' }}
+          tags: ghcr.io/novara-team/nova-gps-frontend:${{ github.sha }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: backend
+          file: backend/sandbox.Dockerfile
+          push: ${{ github.event_name == 'push' }}
+          tags: ghcr.io/novara-team/nova-gps-sandbox:${{ github.sha }}
+      - uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: iac/terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform fmt -check
+      - run: terraform init -backend=false
+      - run: terraform validate
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: [containers, terraform]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - uses: azure/setup-kubectl@v4
+      - name: Configure kubeconfig
+        run: echo "${KUBECONFIG_B64}" | base64 -d > kubeconfig
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
+      - name: Canary deploy
+        run: |
+          export KUBECONFIG=$PWD/kubeconfig
+          helm upgrade --install nova-gps ./k8s/helm/nova-gps \
+            --namespace nova-gps --create-namespace \
+            --set image.api.tag=${{ github.sha }} \
+            --set image.frontend.tag=${{ github.sha }} \
+            --set image.sandbox.tag=${{ github.sha }} \
+            --wait

@@ -1,0 +1,30 @@
+{
+  "title": "NOVA GPS",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "API Request Rate",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total[5m]))",
+          "legendFormat": "requests/sec"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "API 5xx Rate",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total{status=~\"5..\"}[5m]))",
+          "legendFormat": "5xx/sec"
+        }
+      ]
+    }
+  ]
+}

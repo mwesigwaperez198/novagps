@@ -1,0 +1,105 @@
+Generate a complete, production‑ready infrastructure, code scaffold, deployment pipeline, and operational runbook for the "NOVA GPS TRACKING SYSTEM". The output must be runnable from local development through production and must favor a terminal/hacker aesthetic: black background, green monospace UI, terminal panels, hashed output, and a sandboxed command registry for diagnostics. The system must explicitly support tracking of vehicles, motorcycles, smartphones, laptops, and any other trackable devices. Produce files, Kubernetes manifests, Helm chart skeleton, Terraform or cloud IaC examples, CI/CD pipelines, monitoring, logging, backup/restore, and security/compliance artifacts. Organize output into discrete deliverables and return each file content in separate code blocks with short headers.
+
+Project goals and functional requirements
+- Ingest user records (Name, Email, Phone) from external app databases when an admin supplies DB connection credentials for PostgreSQL, MariaDB, Firebase, or Supabase.
+- Track only users who explicitly opt in; store consent records with timestamp, source, and scope.
+- Accept live GPS coordinates from mobile clients (Android/iOS), Traccar, and IoT devices (GPS trackers, LTE-M, NB-IoT, LoRaWAN) via HTTP, MQTT, and Traccar protocols.
+- Support manual device registration with fields: Name, Email, Phone, Identifier (Android ID or generated UUID; IMEI only if legally available), Serial optional, Device Type (vehicle, motorcycle, phone, laptop, other).
+- Persist live and historical coordinates with geospatial indexing and time-series retention; support PostGIS and optional TimescaleDB for high-volume telemetry.
+- Provide a terminal-first dashboard: left DeviceList, center MapPanel (embedded map inside terminal frame or monospace map tiles), right Diagnostics/Terminal, bottom Alerts/Logs. Terminal must display hashed output and green monospace text.
+- Provide a sandboxed diagnosis terminal that executes only pre-approved commands from an immutable command registry; commands run in isolated containers with resource limits, timeouts, and no network access.
+- Stream location updates to Kafka (preferred) or RabbitMQ; provide a Kafka→WebSocket bridge for live frontend updates.
+- Implement Kafka consumer workers for geofence checks, analytics, alerting, and device-type specific pipelines (vehicles/motorcycles vs phones/laptops).
+- Provide secure broadcasting of only map or terminal data to multiple viewers via WebSocket channels with ACLs and session tokens.
+- Enforce security and compliance: TLS for all endpoints, mTLS for internal services, encryption at rest (Postgres + LUKS), RBAC, audit logs, consent logs, data retention and deletion endpoints for GDPR compliance, rate limiting, and secrets management.
+- Provide CI/CD pipeline to build, test, scan, and deploy to Kubernetes; include blue/green or canary deployment patterns and automated DB migrations.
+- Provide monitoring, alerting, and logging: Prometheus metrics, Grafana dashboards, centralized logs (ELK or Loki), and runbooks for incident response.
+- Provide backup and restore procedures for Postgres/PostGIS and Kafka, and disaster recovery guidance.
+
+Architecture stack and components
+- OS: Ubuntu Server or Debian for nodes.
+- Containerization: Docker for local dev; Kubernetes (K8s) for production; Helm chart skeleton.
+- Infrastructure as Code: Terraform examples for cloud resources (VPC, managed K8s, managed Postgres, object storage).
+- Ingestion: Traccar server optional; HTTP endpoints; MQTT broker (Eclipse Mosquitto) for IoT; support for LTE-M/NB-IoT device gateways.
+- Message broker: Apache Kafka + Zookeeper (or managed Kafka) with topic schema and retention policies.
+- Backend microservices: FastAPI (Python) split into API, worker, command-executor, kafka→ws bridge; SQLAlchemy + Alembic; geoalchemy2 for PostGIS.
+- Database: PostgreSQL + PostGIS; optional TimescaleDB for telemetry; partitioning strategy for time-series.
+- Frontend: React with xterm.js for terminal panel, MapPanel using Leaflet or Mapbox embedded in terminal frame, WebSocket client for live updates; CSS monospace theme (black background, green text).
+- Mobile client: Traccar Client or custom Android app using Android ID/UUID; document IMEI limitations and legal constraints.
+- Security: OAuth2 / JWT for API; mTLS for service-to-service; TLS via Let's Encrypt; secrets via HashiCorp Vault or cloud secret manager.
+- Observability: Prometheus, Grafana, ELK or Loki, Jaeger tracing.
+- CI/CD: GitHub Actions or GitLab CI with IaC plan/apply, container build, image scanning, tests, and K8s deployment.
+
+Deliverables to generate
+1. `docker-compose.yml` for local dev: Postgres+PostGIS, Zookeeper, Kafka, Mosquitto, backend API, worker, kafka→ws bridge, frontend dev server, and consumer.
+2. `k8s/` skeleton: Deployments, Services, ConfigMaps, Secrets templates, HorizontalPodAutoscaler, and Helm chart skeleton.
+3. `iac/` examples: Terraform skeleton for cloud infra (VPC, managed K8s, managed Postgres, object storage).
+4. `backend/` folder:
+   - `Dockerfile`, `requirements.txt`, `.env.example`
+   - `db.py` (SQLAlchemy engine, session, Base)
+   - `models.py` (Device, Location, Consent, AuditLog; PostGIS geometry)
+   - `alembic/` scaffold and initial migration enabling PostGIS and creating tables
+   - `main.py` (FastAPI app with endpoints: /register, /update-location, /devices, /devices/{id}, /search, /diagnose, /broadcast, /consent, /delete-data)
+   - `kafka_producer.py`, `kafka_consumer.py`, `worker/geofence.py`
+   - `command_registry.py` (immutable allowed commands, ACL checks, sandboxed executor pattern)
+   - `kafka_to_ws.py` (bridge service)
+   - unit and integration test skeletons (pytest) and example curl/test scripts
+5. `frontend/` folder:
+   - React scaffold with terminal aesthetic: xterm.js terminal component, MapPanel (monospace frame), DeviceList, DeviceRegisterForm, BroadcastController
+   - WebSocket client for live updates and a Kafka→WS demo integration
+   - CSS monospace theme: black background, green text, monospace fonts; CSS variables and minimal theme file
+6. Security and compliance documentation:
+   - TLS and mTLS setup guide
+   - Postgres + LUKS encryption guidance and key management
+   - GDPR checklist: consent capture text, retention policy, deletion endpoints, data minimization
+   - Audit logging design and immutable command registry policy
+   - Legal note on IMEI access and carrier/MDM requirements
+7. Deployment and operations:
+   - Local dev instructions (`docker-compose up --build`)
+   - Production deployment guide: Kubernetes cluster sizing, Kafka sizing, Postgres tuning, backups, and HA recommendations
+   - CI/CD pipeline (GitHub Actions) with IaC plan/apply, build/test/scan, and K8s deploy steps
+   - Monitoring and alerting playbook and runbooks for common incidents
+8. Tests and examples:
+   - curl examples for register/update-location/list
+   - sample Kafka JSON schema and Avro suggestion
+   - PostGIS sample queries for geofence checks using ST_Contains and spatial indexes
+   - unit and integration test skeletons
+9. ASCII and monospace UI mockups:
+   - Terminal UI wireframes in ASCII showing layout and sample green-hashed output lines for device registration, consent logs, location events, and command execution traces.
+
+Environment variables and secrets to include in `.env.example`
+- **DATABASE_URL**=postgresql://nova_admin:strongpassword@postgres:5432/nova_gps
+- **POSTGRES_USER**=nova_admin
+- **POSTGRES_PASSWORD**=strongpassword
+- **POSTGRES_DB**=nova_gps
+- **KAFKA_BROKER**=kafka:9092
+- **KAFKA_TOPIC**=nova.locations
+- **MQTT_BROKER**=mosquitto:1883
+- **SECRET_KEY**=replace_with_secure_random
+- **JWT_ALGORITHM**=HS256
+- **OAUTH_CLIENT_ID**=
+- **OAUTH_CLIENT_SECRET**=
+- **VAULT_ADDR**=
+- **VAULT_TOKEN**=
+- **SENTRY_DSN**=
+- **LETSENCRYPT_EMAIL**=
+- **ENVIRONMENT**=development
+
+Implementation constraints and safety rules
+- The `/diagnose` endpoint must accept only command IDs from `command_registry` and run them in an isolated containerized runner with strict resource limits, no network, and enforced timeouts. Log every execution to `AuditLog` with user, command ID, args, start/end timestamps, exit code, and output hash.
+- Never execute arbitrary shell commands from user input. Provide a safe executor pattern and container image example for sandboxed runs.
+- Use Alembic for DB migrations; include initial migration that enables PostGIS and creates tables.
+- Use environment variables for all secrets; include `.env.example` and instructions to use Vault or cloud secret manager in production.
+- Capture and store consent records before accepting location pings; provide deletion endpoints and retention policy enforcement.
+- Provide RBAC roles: Admin, Operator, Viewer, Auditor; enforce least privilege.
+- Provide rate limiting and input validation for all ingestion endpoints.
+- Provide legal guidance text about IMEI access restrictions and the need for carrier/MDM agreements for IMEI retrieval.
+
+Coding style and output format
+- Return a file list and the full contents of each generated file in separate code blocks.
+- For long files include a short header summary then the file content.
+- Use inline comments and README files in root, backend, and frontend with step-by-step run instructions.
+- Keep code modular and production-minded: separate services, clear env vars, and migration strategy.
+- Provide troubleshooting tips for common issues (DB connection, Kafka connectivity, PostGIS missing).
+
+Start by producing `docker-compose.yml` and `.env.example` consistent with the environment variables above. Then produce backend files (Dockerfile, requirements, db.py, models.py, alembic initial migration, main.py, kafka producer/consumer, command_registry, kafka_to_ws), then frontend scaffold and ASCII UI mockups, then security/compliance docs, deployment guide, CI/CD pipeline, Terraform examples, and test examples. Ensure all generated code references the same environment variables and that the `.env.example` lists them clearly. The final output must be a complete, runnable path from local development to production deployment.

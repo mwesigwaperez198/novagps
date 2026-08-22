@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nova-frontend
+  namespace: nova-gps
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nova-frontend
+  template:
+    metadata:
+      labels:
+        app: nova-frontend
+    spec:
+      containers:
+        - name: frontend
+          image: ghcr.io/novara-team/nova-gps-frontend:latest
+          ports:
+            - containerPort: 5173
+              name: http
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 384Mi

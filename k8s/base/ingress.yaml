@@ -1,0 +1,40 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nova-gps
+  namespace: nova-gps
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - gps.example.com
+      secretName: nova-gps-tls
+  rules:
+    - host: gps.example.com
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: nova-api
+                port:
+                  number: 8000
+          - path: /ws
+            pathType: Prefix
+            backend:
+              service:
+                name: nova-kafka-to-ws
+                port:
+                  number: 8765
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: nova-frontend
+                port:
+                  number: 80

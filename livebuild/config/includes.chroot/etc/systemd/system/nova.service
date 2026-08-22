@@ -1,0 +1,17 @@
+[Unit]
+Description=NOVA portable security platform
+After=network.target
+After=systemd-user-sessions.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/nova/app/backend
+Environment=NOVA_MODE=portable
+Environment=ENVIRONMENT=development
+ExecStart=/bin/bash /opt/nova/start_nova.sh 8000
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

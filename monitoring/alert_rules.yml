@@ -1,0 +1,19 @@
+groups:
+  - name: nova-gps
+    rules:
+      - alert: NovaApiDown
+        expr: up{job="nova-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: NOVA API is down
+          description: Prometheus cannot scrape the FastAPI service.
+      - alert: NovaHighErrorRate
+        expr: sum(rate(http_requests_total{status=~"5.."}[5m])) / sum(rate(http_requests_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: NOVA API 5xx error rate is high
+          description: More than 5 percent of API requests are failing.

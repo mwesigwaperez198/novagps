@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: nova-api
+  namespace: nova-gps
+spec:
+  selector:
+    app: nova-api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nova-kafka-to-ws
+  namespace: nova-gps
+spec:
+  selector:
+    app: nova-kafka-to-ws
+  ports:
+    - name: ws
+      port: 8765
+      targetPort: ws
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nova-frontend
+  namespace: nova-gps
+spec:
+  selector:
+    app: nova-frontend
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

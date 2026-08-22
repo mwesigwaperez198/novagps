@@ -1,0 +1,21 @@
+{
+  "name": "nova-gps-netlify-functions",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "auth.js",
+  "scripts": {
+    "dev": "netlify dev",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.12.0"
+  },
+  "devDependencies": {
+    "@types/jsonwebtoken": "^9.0.6",
+    "@types/node": "^22.0.0",
+    "netlify-cli": "^17.0.0",
+    "typescript": "^5.5.0"
+  }
+}

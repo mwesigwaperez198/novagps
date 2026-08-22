@@ -1,0 +1,227 @@
+x-nova-env: &nova-env
+  DATABASE_URL: ${DATABASE_URL:-postgresql://nova_admin:strongpassword@postgres:5432/nova_gps}
+  POSTGRES_USER: ${POSTGRES_USER:-nova_admin}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-strongpassword}
+  POSTGRES_DB: ${POSTGRES_DB:-nova_gps}
+  KAFKA_BROKER: ${KAFKA_BROKER:-kafka:9092}
+  KAFKA_TOPIC: ${KAFKA_TOPIC:-nova.locations}
+  MQTT_BROKER: ${MQTT_BROKER:-mosquitto:1883}
+  SECRET_KEY: ${SECRET_KEY:-replace_with_secure_random}
+  JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+  OAUTH_CLIENT_ID: ${OAUTH_CLIENT_ID:-}
+  OAUTH_CLIENT_SECRET: ${OAUTH_CLIENT_SECRET:-}
+  VAULT_ADDR: ${VAULT_ADDR:-}
+  VAULT_TOKEN: ${VAULT_TOKEN:-}
+  SENTRY_DSN: ${SENTRY_DSN:-}
+  LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL:-}
+  ENVIRONMENT: ${ENVIRONMENT:-development}
+  SANDBOX_EXECUTOR_MODE: ${SANDBOX_EXECUTOR_MODE:-mock}
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+
+services:
+  postgres:
+    image: postgis/postgis:15-3.4
+    container_name: nova_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-nova_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-strongpassword}
+      POSTGRES_DB: ${POSTGRES_DB:-nova_gps}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nova_admin} -d ${POSTGRES_DB:-nova_gps}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: nova_zookeeper
+    restart: unless-stopped
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: nova_kafka
+    restart: unless-stopped
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    depends_on:
+      - zookeeper
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+
+  kafka-init:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: nova_kafka_init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command: kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic nova.locations --partitions 6 --replication-factor 1 --config retention.ms=604800000
+    restart: "no"
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: nova_mosquitto
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
+  backend-api:
+    build:
+      context: ./backend
+    container_name: nova_backend_api
+    restart: unless-stopped
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+    environment:
+      <<: *nova-env
+      SERVICE_NAME: backend-api
+    volumes:
+      - ./backend:/app
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ./backend
+    container_name: nova_worker
+    restart: unless-stopped
+    command: python kafka_consumer.py
+    environment:
+      <<: *nova-env
+      SERVICE_NAME: worker
+    volumes:
+      - ./backend:/app
+    depends_on:
+      backend-api:
+        condition: service_started
+
+  kafka-to-ws:
+    build:
+      context: ./backend
+    container_name: nova_kafka_to_ws
+    restart: unless-stopped
+    command: python kafka_to_ws.py
+    environment:
+      <<: *nova-env
+      SERVICE_NAME: kafka-to-ws
+      WS_HOST: 0.0.0.0
+      WS_PORT: 8765
+    volumes:
+      - ./backend:/app
+    ports:
+      - "8765:8765"
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  mqtt-consumer:
+    build:
+      context: ./backend
+    container_name: nova_mqtt_consumer
+    restart: unless-stopped
+    command: python mqtt_consumer.py
+    environment:
+      <<: *nova-env
+      SERVICE_NAME: mqtt-consumer
+    volumes:
+      - ./backend:/app
+    depends_on:
+      - mosquitto
+      - backend-api
+
+  command-executor:
+    build:
+      context: ./backend
+      dockerfile: sandbox.Dockerfile
+    container_name: nova_command_executor
+    profiles: ["sandbox"]
+    command: "printf 'nova-sandbox-runner=ready\\n'"
+    network_mode: "none"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 64
+    mem_limit: 64m
+    cpus: 0.25
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: nova_frontend
+    restart: unless-stopped
+    environment:
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+      VITE_WS_URL: ${VITE_WS_URL:-ws://localhost:8765}
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend-api
+      - kafka-to-ws
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: nova_prometheus
+    restart: unless-stopped
+    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - backend-api
+
+  grafana:
+    image: grafana/grafana:11.1.4
+    container_name: nova_grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
+volumes:
+  postgres_data:
+  grafana_data:
