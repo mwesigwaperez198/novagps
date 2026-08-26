@@ -181,6 +181,9 @@ def device_response(db: Session, device: Device) -> DeviceResponse:
             "serial": device.serial,
             "imei": device.imei,
             "model": device.model,
+            "manufacturer": device.manufacturer,
+            "os_type": device.os_type,
+            "os_version": device.os_version,
             "device_type": device.device_type,
             "is_active": device.is_active,
             "created_at": device.created_at,
@@ -264,6 +267,9 @@ def register_device(
         serial=payload.serial,
         imei=payload.imei,
         model=payload.model,
+        manufacturer=payload.manufacturer,
+        os_type=payload.os_type,
+        os_version=payload.os_version,
         device_type=payload.device_type,
     )
     db.add(device)
@@ -867,6 +873,88 @@ def osint_sqlmap(
     principal: Principal = Depends(require_roles("operator", "admin")),
 ) -> dict:
     return osint.scan_sqlmap(url)
+
+
+@app.get("/osint/theharvester")
+def osint_theharvester(
+    domain: str = Query(..., max_length=120),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    return osint.scan_theharvester(domain)
+
+
+@app.get("/osint/whatweb")
+def osint_whatweb(
+    url: str = Query(..., max_length=500),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    return osint.scan_whatweb(url)
+
+
+@app.get("/osint/wpscan")
+def osint_wpscan(
+    url: str = Query(..., max_length=500),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    return osint.scan_wpscan(url)
+
+
+@app.get("/osint/dirb")
+def osint_dirb(
+    url: str = Query(..., max_length=500),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    return osint.scan_dirb(url)
+
+
+@app.get("/osint/sublist3r")
+def osint_sublist3r(
+    domain: str = Query(..., max_length=120),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    return osint.scan_sublist3r(domain)
+
+
+@app.get("/pentest/vuln-scan")
+def pentest_vuln_scan(
+    target: str = Query(..., max_length=120),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    return osint.scan_nmap_vuln(target)
+
+
+@app.get("/pentest/auth-scan")
+def pentest_auth_scan(
+    target: str = Query(..., max_length=120),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    return osint.scan_nmap_auth(target)
+
+
+@app.post("/tool/run")
+def run_tool(
+    command_id: str = Query(..., max_length=120),
+    target: str = Query("", max_length=200),
+    url: str = Query("", max_length=500),
+    domain: str = Query("", max_length=120),
+    path: str = Query("", max_length=240),
+    interface: str = Query("", max_length=32),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    args = {}
+    if target:
+        args["target"] = target
+    if url:
+        args["url"] = url
+    if domain:
+        args["domain"] = domain
+    if path:
+        args["path"] = path
+    if interface:
+        args["interface"] = interface
+    create_audit(db := next(get_db()), principal, "tool.run", {"command_id": command_id, "args": args})
+    db.close()
+    return osint.run_tool_command(command_id, args)
 
 
 @app.get("/geofences")

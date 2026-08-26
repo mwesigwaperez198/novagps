@@ -67,5 +67,16 @@ export const api = {
   osintHttpHeaders: (url) => request(`/osint/http-headers?url=${encodeURIComponent(url)}`),
   osintNikto: (target) => request(`/osint/nikto?target=${encodeURIComponent(target)}`),
   osintSqlmap: (url) => request(`/osint/sqlmap?url=${encodeURIComponent(url)}`),
+  osintTheharvester: (domain) => request(`/osint/theharvester?domain=${encodeURIComponent(domain)}`),
+  osintWhatweb: (url) => request(`/osint/whatweb?url=${encodeURIComponent(url)}`),
+  osintWpscan: (url) => request(`/osint/wpscan?url=${encodeURIComponent(url)}`),
+  osintDirb: (url) => request(`/osint/dirb?url=${encodeURIComponent(url)}`),
+  osintSublist3r: (domain) => request(`/osint/sublist3r?domain=${encodeURIComponent(domain)}`),
+  pentestVulnScan: (target) => request(`/pentest/vuln-scan?target=${encodeURIComponent(target)}`),
+  pentestAuthScan: (target) => request(`/pentest/auth-scan?target=${encodeURIComponent(target)}`),
+  toolRun: (commandId, params = {}) => {
+    const qs = new URLSearchParams({ command_id: commandId, ...params });
+    return request(`/tool/run?${qs}`, { method: "POST" });
+  },
   geofences: () => request("/geofences"),
 };

@@ -15,6 +15,9 @@ class DeviceRegisterRequest(BaseModel):
     serial: str | None = Field(None, max_length=160)
     imei: str | None = Field(None, max_length=32)
     model: str | None = Field(None, max_length=160)
+    manufacturer: str | None = Field(None, max_length=160)
+    os_type: str | None = Field(None, max_length=64)
+    os_version: str | None = Field(None, max_length=64)
     device_type: DeviceType = DeviceType.other
     consent_source: str | None = Field(None, max_length=120)
     consent_scope: str | None = Field(None, max_length=1000)
@@ -62,6 +65,9 @@ class DeviceResponse(BaseModel):
     serial: str | None
     imei: str | None
     model: str | None
+    manufacturer: str | None
+    os_type: str | None
+    os_version: str | None
     device_type: DeviceType
     is_active: bool
     created_at: datetime

@@ -159,3 +159,180 @@ def scan_sqlmap(url: str) -> dict:
         return {"url": url, "injectable": injectable, "raw": output[-4096:]}
     except FileNotFoundError:
         return {"error": "sqlmap not installed"}
+
+
+def scan_theharvester(domain: str) -> dict:
+    if not DOMAIN_PATTERN.fullmatch(domain):
+        return {"error": "invalid domain format"}
+    try:
+        completed = subprocess.run(
+            ["theHarvester", "-d", domain, "-b", "all"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=120,
+            check=False,
+        )
+        output = completed.stdout.decode("utf-8", errors="replace")
+        emails = []
+        subdomains = []
+        for line in output.splitlines():
+            if "@" in line and domain in line:
+                emails.append(line.strip())
+            elif domain in line and " " not in line and line.strip():
+                subdomains.append(line.strip())
+        return {"domain": domain, "emails": emails, "subdomains": subdomains, "raw": output[-4096:]}
+    except FileNotFoundError:
+        return {"error": "theHarvester not installed"}
+
+
+def scan_whatweb(url: str) -> dict:
+    if not url.lower().startswith(("http://", "https://")):
+        return {"error": "url must start with http:// or https://"}
+    try:
+        completed = subprocess.run(
+            ["whatweb", "-a", "3", "--color=never", url],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=30,
+            check=False,
+        )
+        output = completed.stdout.decode("utf-8", errors="replace")
+        technologies = []
+        for line in output.splitlines():
+            if "[" in line:
+                techs = re.findall(r"\[([^\]]+)\]", line)
+                technologies.extend(techs)
+        return {"url": url, "technologies": technologies, "raw": output[-4096:]}
+    except FileNotFoundError:
+        return {"error": "whatweb not installed"}
+
+
+def scan_wpscan(url: str) -> dict:
+    if not url.lower().startswith(("http://", "https://")):
+        return {"error": "url must start with http:// or https://"}
+    try:
+        completed = subprocess.run(
+            ["wpscan", "--url", url, "--enumerate", "vp,vt,u", "--no-banner"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=120,
+            check=False,
+        )
+        output = completed.stdout.decode("utf-8", errors="replace")
+        plugins = re.findall(r"Title: ([^\n]+)", output)
+        return {"url": url, "plugins": plugins, "raw": output[-4096:]}
+    except FileNotFoundError:
+        return {"error": "wpscan not installed"}
+
+
+def scan_dirb(url: str) -> dict:
+    if not url.lower().startswith(("http://", "https://")):
+        return {"error": "url must start with http:// or https://"}
+    try:
+        completed = subprocess.run(
+            ["dirb", url],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=120,
+            check=False,
+        )
+        output = completed.stdout.decode("utf-8", errors="replace")
+        found = re.findall(r"\+ ([^\n]+)", output)
+        return {"url": url, "directories": found, "count": len(found), "raw": output[-4096:]}
+    except FileNotFoundError:
+        return {"error": "dirb not installed"}
+
+
+def scan_nmap_vuln(target: str) -> dict:
+    if not DOMAIN_PATTERN.fullmatch(target) and not IP_PATTERN.fullmatch(target):
+        return {"error": "target must be a domain or IP"}
+    try:
+        completed = subprocess.run(
+            ["nmap", "-Pn", "--script", "vuln", target],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=300,
+            check=False,
+        )
+        output = completed.stdout.decode("utf-8", errors="replace")
+        vulns = []
+        for line in output.splitlines():
+            if "VULNERABLE" in line or "CVE-" in line:
+                vulns.append(line.strip())
+        return {"target": target, "vulnerabilities": vulns, "count": len(vulns), "raw": output[-4096:]}
+    except FileNotFoundError:
+        return {"error": "nmap not installed"}
+
+
+def scan_nmap_auth(target: str) -> dict:
+    if not DOMAIN_PATTERN.fullmatch(target) and not IP_PATTERN.fullmatch(target):
+        return {"error": "target must be a domain or IP"}
+    try:
+        completed = subprocess.run(
+            ["nmap", "-Pn", "--script", "auth", target],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=300,
+            check=False,
+        )
+        output = completed.stdout.decode("utf-8", errors="replace")
+        auth_issues = []
+        for line in output.splitlines():
+            if "anonymous" in line.lower() or "default" in line.lower() or "no auth" in line.lower():
+                auth_issues.append(line.strip())
+        return {"target": target, "auth_issues": auth_issues, "raw": output[-4096:]}
+    except FileNotFoundError:
+        return {"error": "nmap not installed"}
+
+
+def scan_sublist3r(domain: str) -> dict:
+    if not DOMAIN_PATTERN.fullmatch(domain):
+        return {"error": "invalid domain format"}
+    try:
+        completed = subprocess.run(
+            ["sublist3r", "-d", domain],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=60,
+            check=False,
+        )
+        output = completed.stdout.decode("utf-8", errors="replace")
+        subdomains = [line.strip() for line in output.splitlines() if domain in line and line.strip()]
+        return {"domain": domain, "subdomains": subdomains, "count": len(subdomains), "raw": output[-4096:]}
+    except FileNotFoundError:
+        return {"error": "sublist3r not installed"}
+
+
+def scan_nikto_full(target: str) -> dict:
+    return scan_nikto(target)
+
+
+def run_tool_command(command_id: str, args: dict) -> dict:
+    import shutil
+    from tool_registry import TOOL_REGISTRY, resolve_host_argv
+
+    spec = TOOL_REGISTRY.get(command_id)
+    if not spec:
+        return {"error": f"Unknown tool: {command_id}"}
+    if not any(shutil.which(b) for b in spec.host_binaries):
+        return {"error": f"Tool not installed: {command_id}", "binaries": spec.host_binaries}
+    try:
+        argv = resolve_host_argv(spec, args)
+        completed = subprocess.run(
+            list(argv),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=spec.timeout_seconds,
+            check=False,
+        )
+        output = completed.stdout.decode("utf-8", errors="replace")
+        return {
+            "command_id": command_id,
+            "exit_code": completed.returncode,
+            "output": output[-8192:],
+            "truncated": len(output) > 8192,
+        }
+    except subprocess.TimeoutExpired:
+        return {"command_id": command_id, "error": "timeout", "timeout": spec.timeout_seconds}
+    except Exception as exc:
+        return {"command_id": command_id, "error": str(exc)}
