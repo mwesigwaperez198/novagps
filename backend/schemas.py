@@ -19,6 +19,8 @@ class DeviceRegisterRequest(BaseModel):
     os_type: str | None = Field(None, max_length=64)
     os_version: str | None = Field(None, max_length=64)
     device_type: DeviceType = DeviceType.other
+    ip_address: str | None = Field(None, max_length=45)
+    mac_address: str | None = Field(None, max_length=17)
     consent_source: str | None = Field(None, max_length=120)
     consent_scope: str | None = Field(None, max_length=1000)
 
@@ -69,7 +71,10 @@ class DeviceResponse(BaseModel):
     os_type: str | None
     os_version: str | None
     device_type: DeviceType
+    ip_address: str | None = None
+    mac_address: str | None = None
     is_active: bool
+    is_lost_mode: bool = False
     created_at: datetime
     latest_location: dict[str, Any] | None = None
 

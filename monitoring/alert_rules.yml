@@ -9,6 +9,7 @@ groups:
         annotations:
           summary: NOVA API is down
           description: Prometheus cannot scrape the FastAPI service.
+
       - alert: NovaHighErrorRate
         expr: sum(rate(http_requests_total{status=~"5.."}[5m])) / sum(rate(http_requests_total[5m])) > 0.05
         for: 5m
@@ -17,3 +18,57 @@ groups:
         annotations:
           summary: NOVA API 5xx error rate is high
           description: More than 5 percent of API requests are failing.
+
+      - alert: NovaHighLatency
+        expr: histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) > 2.0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: NOVA API p95 latency is above 2s
+          description: The 95th percentile response time exceeds 2 seconds.
+
+      - alert: NovaKafkaLagHigh
+        expr: kafka_consumergroup_lag > 500
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Kafka consumer group lag is high
+          description: More than 500 messages pending consumption.
+
+      - alert: NovaGeofenceAlertSpike
+        expr: sum(rate(nova_geofence_alerts_total[5m])) > 10
+        for: 2m
+        labels:
+          severity: info
+        annotations:
+          summary: Geofence alert rate is elevated
+          description: More than 10 geofence alerts per second detected.
+
+      - alert: NovaDeviceCountZero
+        expr: nova_devices_active == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: No active devices
+          description: The system reports zero active devices for 10 minutes.
+
+      - alert: NovaConsentChainBroken
+        expr: nova_consent_chain_valid == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Consent hash chain integrity check failed
+          description: The tamper-evident consent chain has a broken link.
+
+      - alert: NovaMqttDisconnected
+        expr: up{job="nova-mosquitto"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: MQTT broker is unreachable
+          description: IoT devices cannot publish location updates.

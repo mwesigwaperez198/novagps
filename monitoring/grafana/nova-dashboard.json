@@ -1,28 +1,226 @@
 {
-  "title": "NOVA GPS",
+  "title": "NOVA GPS — Full Observability",
+  "description": "Comprehensive monitoring for NOVA GPS Tracking System",
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
   "panels": [
     {
-      "type": "timeseries",
-      "title": "API Request Rate",
-      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "type": "stat",
+      "title": "API Status",
+      "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
       "targets": [
-        {
-          "expr": "sum(rate(http_requests_total[5m]))",
-          "legendFormat": "requests/sec"
+        { "expr": "up{job=\"nova-api\"}", "legendFormat": "up" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }
+          ],
+          "thresholds": { "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
         }
-      ]
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Active Devices",
+      "gridPos": { "x": 4, "y": 0, "w": 4, "h": 4 },
+      "targets": [
+        { "expr": "nova_devices_active", "legendFormat": "devices" }
+      ],
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "blue", "value": null }] } } }
+    },
+    {
+      "type": "stat",
+      "title": "Consent Records",
+      "gridPos": { "x": 8, "y": 0, "w": 4, "h": 4 },
+      "targets": [
+        { "expr": "nova_consents_total", "legendFormat": "consents" }
+      ],
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "purple", "value": null }] } } }
+    },
+    {
+      "type": "stat",
+      "title": "WebSocket Clients",
+      "gridPos": { "x": 12, "y": 0, "w": 4, "h": 4 },
+      "targets": [
+        { "expr": "nova_websocket_connections", "legendFormat": "connections" }
+      ],
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "orange", "value": null }] } } }
+    },
+    {
+      "type": "stat",
+      "title": "Kafka Lag",
+      "gridPos": { "x": 16, "y": 0, "w": 4, "h": 4 },
+      "targets": [
+        { "expr": "kafka_consumergroup_lag", "legendFormat": "lag" }
+      ],
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 100 }, { "color": "red", "value": 1000 }] } } }
+    },
+    {
+      "type": "stat",
+      "title": "MQTT Messages/sec",
+      "gridPos": { "x": 20, "y": 0, "w": 4, "h": 4 },
+      "targets": [
+        { "expr": "rate(mqtt_messages_received_total[5m])", "legendFormat": "msg/s" }
+      ],
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }] } } }
     },
     {
       "type": "timeseries",
-      "title": "API 5xx Rate",
-      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "title": "API Request Rate",
+      "description": "Total HTTP requests per second across all endpoints",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "sum(rate(http_requests_total[5m]))", "legendFormat": "requests/sec" },
+        { "expr": "sum(rate(http_requests_total{status=~\"2..\"}[5m]))", "legendFormat": "2xx/sec" },
+        { "expr": "sum(rate(http_requests_total{status=~\"4..\"}[5m]))", "legendFormat": "4xx/sec" }
+      ],
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "fillOpacity": 10 } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "API 5xx Error Rate",
+      "description": "Server errors per second — should be near zero",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "sum(rate(http_requests_total{status=~\"5..\"}[5m]))", "legendFormat": "5xx/sec" }
+      ],
+      "fieldConfig": { "defaults": { "color": { "fixedColor": "red", "mode": "fixed" }, "custom": { "fillOpacity": 20 } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "API Latency (p50 / p95 / p99)",
+      "description": "Response time percentiles in seconds",
+      "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p95" },
+        { "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p99" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "fillOpacity": 5 } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Location Events Ingested",
+      "description": "GPS coordinates received per second by source",
+      "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "sum(rate(nova_location_events_total[5m])) by (source)", "legendFormat": "{{source}}" }
+      ],
+      "fieldConfig": { "defaults": { "custom": { "fillOpacity": 15 } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Kafka Publish Rate",
+      "description": "Events published to Kafka per second",
+      "gridPos": { "x": 0, "y": 20, "w": 8, "h": 8 },
+      "targets": [
+        { "expr": "rate(kafka_messages_sent_total[5m])", "legendFormat": "sent/sec" },
+        { "expr": "rate(kafka_messages_received_total[5m])", "legendFormat": "consumed/sec" }
+      ],
+      "fieldConfig": { "defaults": { "custom": { "fillOpacity": 10 } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "MQTT Broker Messages",
+      "description": "MQTT publish/subscribe message rates",
+      "gridPos": { "x": 8, "y": 20, "w": 8, "h": 8 },
+      "targets": [
+        { "expr": "rate(mqtt_messages_published_total[5m])", "legendFormat": "published/sec" },
+        { "expr": "rate(mqtt_messages_received_total[5m])", "legendFormat": "received/sec" }
+      ],
+      "fieldConfig": { "defaults": { "custom": { "fillOpacity": 10 } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "WebSocket Connections",
+      "description": "Active WebSocket connections over time",
+      "gridPos": { "x": 16, "y": 20, "w": 8, "h": 8 },
+      "targets": [
+        { "expr": "nova_websocket_connections", "legendFormat": "active" }
+      ],
+      "fieldConfig": { "defaults": { "color": { "fixedColor": "orange", "mode": "fixed" }, "custom": { "fillOpacity": 20 } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Geofence Alerts",
+      "description": "Number of geofence breach events per minute",
+      "gridPos": { "x": 0, "y": 28, "w": 8, "h": 8 },
+      "targets": [
+        { "expr": "sum(rate(nova_geofence_alerts_total[5m]))", "legendFormat": "alerts/min" }
+      ],
+      "fieldConfig": { "defaults": { "color": { "fixedColor": "yellow", "mode": "fixed" }, "custom": { "fillOpacity": 15 } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Consent Capture / Revoke Rate",
+      "description": "Consent events per second",
+      "gridPos": { "x": 8, "y": 28, "w": 8, "h": 8 },
+      "targets": [
+        { "expr": "sum(rate(nova_consent_events_total{action=\"capture\"}[5m]))", "legendFormat": "capture/sec" },
+        { "expr": "sum(rate(nova_consent_events_total{action=\"revoke\"}[5m]))", "legendFormat": "revoke/sec" },
+        { "expr": "sum(rate(nova_consent_events_total{action=\"gdpr_delete\"}[5m]))", "legendFormat": "delete/sec" }
+      ],
+      "fieldConfig": { "defaults": { "custom": { "fillOpacity": 10 } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Command Execution Rate",
+      "description": "Sandboxed command executions per second by status",
+      "gridPos": { "x": 16, "y": 28, "w": 8, "h": 8 },
+      "targets": [
+        { "expr": "sum(rate(nova_command_executions_total[5m])) by (exit_code)", "legendFormat": "exit={{exit_code}}" }
+      ],
+      "fieldConfig": { "defaults": { "custom": { "fillOpacity": 10 } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "OSINT Tool Runs",
+      "description": "OSINT and pentest tool invocations per minute",
+      "gridPos": { "x": 0, "y": 36, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "sum(rate(nova_osint_runs_total[5m])) by (tool)", "legendFormat": "{{tool}}" }
+      ],
+      "fieldConfig": { "defaults": { "custom": { "fillOpacity": 10 } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "SMS Delivery Rate",
+      "description": "SMS messages sent via Africa's Talking or generic gateway",
+      "gridPos": { "x": 12, "y": 36, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "rate(nova_sms_sent_total[5m])", "legendFormat": "sent/sec" },
+        { "expr": "rate(nova_sms_failed_total[5m])", "legendFormat": "failed/sec" }
+      ],
+      "fieldConfig": { "defaults": { "custom": { "fillOpacity": 10 } } }
+    },
+    {
+      "type": "table",
+      "title": "Top Endpoints by Request Count",
+      "description": "Most frequently called API endpoints",
+      "gridPos": { "x": 0, "y": 44, "w": 12, "h": 8 },
       "targets": [
         {
-          "expr": "sum(rate(http_requests_total{status=~\"5..\"}[5m]))",
-          "legendFormat": "5xx/sec"
+          "expr": "topk(10, sum(increase(http_requests_total[1h])) by (handler))",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [{ "id": "organize", "options": { "renameByName": { "handler": "Endpoint", "Value": "Requests (1h)" } } }]
+    },
+    {
+      "type": "table",
+      "title": "Recent Geofence Breaches",
+      "description": "Latest geofence alert events",
+      "gridPos": { "x": 12, "y": 44, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "nova_geofence_alerts_total",
+          "format": "table",
+          "instant": true
         }
       ]
     }

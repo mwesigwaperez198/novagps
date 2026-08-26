@@ -26,6 +26,7 @@ from eventbus import bus
 from jose import jwt
 from kafka_producer import publish_location_event
 from models import (
+    Alert,
     AuditLog,
     BroadcastSession,
     Consent,
@@ -49,11 +50,23 @@ from schemas import (
     LocationUpdateRequest,
 )
 from tool_registry import TOOL_REGISTRY, tool_available
+import blockchain_anchor
 
 import camera
 import vpn
 import ids
 import osint
+import sms
+import fingerprint
+import discovery
+import push_service
+import remote_commands
+import wifi_security
+import firmware
+import vehicle_recovery
+import scheduler
+import webhooks
+from oui_lookup import lookup_vendor, normalize_mac
 from worker.geofence import list_geofences_as_dicts
 
 
@@ -185,7 +198,10 @@ def device_response(db: Session, device: Device) -> DeviceResponse:
             "os_type": device.os_type,
             "os_version": device.os_version,
             "device_type": device.device_type,
+            "ip_address": device.ip_address,
+            "mac_address": device.mac_address,
             "is_active": device.is_active,
+            "is_lost_mode": getattr(device, "is_lost_mode", False),
             "created_at": device.created_at,
             "latest_location": latest_location_dict(db, device.id),
         }
@@ -271,6 +287,8 @@ def register_device(
         os_type=payload.os_type,
         os_version=payload.os_version,
         device_type=payload.device_type,
+        ip_address=payload.ip_address,
+        mac_address=payload.mac_address,
     )
     db.add(device)
     try:
@@ -313,7 +331,11 @@ def capture_consent(
     db.add(consent)
     create_audit(db, principal, "consent.capture", {"device_id": device.id, "scope": payload.scope})
     db.commit()
-    return {"status": "accepted", "consent_id": consent.id}
+    anchor = blockchain_anchor.anchor_consent_event(
+        db, consent_id=consent.id, device_id=device.id, action="capture",
+        payload={"source": payload.source, "scope": payload.scope, "email": device.email},
+    )
+    return {"status": "accepted", "consent_id": consent.id, "chain_hash": anchor.chain_hash}
 
 
 @app.post("/consent/revoke")
@@ -329,7 +351,31 @@ def revoke_consent(
     )
     create_audit(db, principal, "consent.revoke", {"device_id": payload.device_id, "reason": payload.reason})
     db.commit()
+    blockchain_anchor.anchor_consent_event(
+        db, consent_id=f"revoke-{payload.device_id}", device_id=payload.device_id, action="revoke",
+        payload={"reason": payload.reason, "actor": principal.subject},
+    )
     return {"revoked": result}
+
+
+@app.get("/consent/history")
+def consent_history(
+    device_id: str = Query(..., min_length=1),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> list[dict[str, Any]]:
+    return blockchain_anchor.get_consent_history(db, device_id, limit)
+
+
+@app.get("/consent/verify-chain")
+def verify_consent_chain(
+    start: int = Query(0, ge=0),
+    limit: int = Query(1000, ge=1, le=10000),
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(require_roles("admin")),
+) -> dict[str, Any]:
+    return blockchain_anchor.verify_chain(db, start, limit)
 
 
 @app.post("/update-location", status_code=status.HTTP_202_ACCEPTED)
@@ -683,6 +729,11 @@ def delete_data(
         db.execute(delete(ImportedUser).where(ImportedUser.email == str(payload.email)))
     create_audit(db, principal, "gdpr.delete_data", {"device_ids": device_ids, "email": str(payload.email) if payload.email else None, "reason": payload.reason})
     db.commit()
+    for did in device_ids:
+        blockchain_anchor.anchor_consent_event(
+            db, consent_id=f"delete-{did}", device_id=did, action="gdpr_delete",
+            payload={"reason": payload.reason, "actor": principal.subject},
+        )
     return {"deleted_devices": len(device_ids), "email": payload.email}
 
 
@@ -974,11 +1025,591 @@ def run_tool(
     return osint.run_tool_command(command_id, args)
 
 
+@app.post("/remote/sms")
+def remote_send_sms(
+    device_id: str = Query(..., max_length=36),
+    message: str = Query(..., min_length=1, max_length=500),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    db = next(get_db())
+    device = db.get(Device, device_id)
+    if not device:
+        db.close()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
+    if not device.phone:
+        db.close()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Device has no phone number")
+    result = sms.send_sms(device.phone, message)
+    create_audit(db, principal, "remote.sms", {"device_id": device_id, "phone": device.phone, "message_preview": message[:100], "success": result.get("success", False)})
+    db.commit()
+    db.close()
+    return {**result, "device_name": device.name}
+
+
+@app.get("/remote/icloud-instructions")
+def remote_icloud_instructions(
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    return sms.get_icloud_instructions()
+
+
+@app.get("/remote/android-instructions")
+def remote_android_instructions(
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    return sms.get_android_instructions()
+
+
+@app.get("/remote/mdm-instructions")
+def remote_mdm_instructions(
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    return sms.get_mdm_lock_instructions()
+
+
+@app.post("/remote/lock-guide")
+def remote_lock_guide(
+    device_id: str = Query(..., max_length=36),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    db = next(get_db())
+    device = db.get(Device, device_id)
+    db.close()
+    if not device:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
+    os_type = (device.os_type or "").lower()
+    manufacturer = (device.manufacturer or "").lower()
+    if "ios" in os_type or "apple" in manufacturer:
+        instructions = sms.get_icloud_instructions()
+    elif "android" in os_type or "google" in manufacturer or "samsung" in manufacturer:
+        instructions = sms.get_android_instructions()
+    else:
+        instructions = {
+            "service": "Generic Lock",
+            "note": f"Device type: {device.os_type or 'Unknown'} ({device.manufacturer or 'Unknown'})",
+            "steps": [
+                "1. Contact the carrier to report the device stolen",
+                "2. Request IMEI blacklist via GSMA",
+                "3. File a police report with IMEI and serial number",
+                "4. Use any available MDM or tracking service",
+            ],
+            "imei": device.imei,
+            "serial": device.serial,
+        }
+    return {
+        "device_id": device_id,
+        "device_name": device.name,
+        "os_type": device.os_type,
+        "manufacturer": device.manufacturer,
+        "imei": device.imei,
+        "serial": device.serial,
+        "phone": device.phone,
+        **instructions,
+    }
+
+
 @app.get("/geofences")
 def geofences_list(
     principal: Principal = Depends(require_roles("viewer", "operator", "admin")),
 ) -> dict:
     return {"geofences": list_geofences_as_dicts()}
+
+
+@app.get("/geofences/{geofence_id}")
+def get_geofence(
+    geofence_id: str,
+    principal: Principal = Depends(require_roles("viewer", "operator", "admin")),
+) -> dict:
+    from worker.geofence import DEFAULT_GEOFENCES
+    for f in DEFAULT_GEOFENCES:
+        if f.geofence_id == geofence_id:
+            from worker.geofence import parse_wkt_polygon
+            return {"geofence_id": f.geofence_id, "name": f.name, "polygon_wkt": f.polygon_wkt, "coords": parse_wkt_polygon(f.polygon_wkt)}
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Geofence not found")
+
+
+@app.get("/device/{device_id}/fingerprint")
+def device_fingerprint(
+    device_id: str,
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    db = next(get_db())
+    device = db.get(Device, device_id)
+    db.close()
+    if not device:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
+    ip = device.ip_address
+    if not ip:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Device has no IP address set")
+    return fingerprint.fingerprint_device(ip)
+
+
+@app.post("/fingerprint/ip/{ip}")
+def fingerprint_ip(
+    ip: str,
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    return fingerprint.fingerprint_device(ip)
+
+
+@app.get("/device/{device_id}/oui")
+def device_oui(
+    device_id: str,
+    principal: Principal = Depends(require_roles("viewer", "operator", "admin")),
+) -> dict:
+    db = next(get_db())
+    device = db.get(Device, device_id)
+    db.close()
+    if not device:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
+    vendor = lookup_vendor(device.mac_address)
+    return {"device_id": device_id, "mac": device.mac_address, "vendor": vendor}
+
+
+@app.post("/discovery/scan-network")
+def discovery_scan_network(
+    subnet: str = Query("192.168.1.0/24", max_length=60),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    create_audit(db := next(get_db()), principal, "discovery.scan_network", {"subnet": subnet})
+    db.close()
+    return discovery.scan_network(subnet)
+
+
+@app.get("/discovery/usb")
+def discovery_usb(
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    return discovery.discover_usb_devices()
+
+
+@app.get("/discovery/arp")
+def discovery_arp(
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    return {"devices": discovery.arp_scan()}
+
+
+@app.get("/device/{device_id}/commands")
+def device_commands(
+    device_id: str,
+    limit: int = Query(20, ge=1, le=100),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    db = next(get_db())
+    result = push_service.get_command_history(db, device_id, limit)
+    db.close()
+    return {"commands": result}
+
+
+@app.get("/device/{device_id}/commands/pending")
+def device_pending_commands(
+    device_id: str,
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    db = next(get_db())
+    result = push_service.get_pending_commands(db, device_id)
+    db.close()
+    return {"pending": result}
+
+
+@app.post("/device/{device_id}/trigger-locate")
+def device_trigger_locate(
+    device_id: str,
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    db = next(get_db())
+    device = db.get(Device, device_id)
+    if not device:
+        db.close()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
+    result = push_service.queue_locate_command(db, device_id, "locate", {"type": "single", "requested_by": principal.subject})
+    db.close()
+    return result
+
+
+@app.post("/device/{device_id}/remote-lock")
+def device_remote_lock(
+    device_id: str,
+    message: str = Query("This device has been remotely locked.", max_length=500),
+    contact: str = Query("", max_length=100),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    db = next(get_db())
+    device = db.get(Device, device_id)
+    if not device:
+        db.close()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
+    result = remote_commands.lock_device(db, device, message, contact)
+    create_audit(db, principal, "remote.lock", {"device_id": device_id})
+    db.close()
+    return result
+
+
+@app.post("/device/{device_id}/remote-wipe")
+def device_remote_wipe(
+    device_id: str,
+    confirm_code: str = Query("", max_length=20),
+    principal: Principal = Depends(require_roles("admin")),
+) -> dict:
+    db = next(get_db())
+    device = db.get(Device, device_id)
+    if not device:
+        db.close()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
+    result = remote_commands.wipe_device(db, device, confirm_code)
+    create_audit(db, principal, "remote.wipe", {"device_id": device_id})
+    db.close()
+    return result
+
+
+@app.post("/device/{device_id}/lost-mode")
+def device_lost_mode(
+    device_id: str,
+    message: str = Query("This device is lost. Please call the owner.", max_length=500),
+    contact: str = Query("", max_length=100),
+    location_interval: int = Query(30, ge=10, le=300),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    db = next(get_db())
+    device = db.get(Device, device_id)
+    if not device:
+        db.close()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
+    result = remote_commands.lost_mode(db, device, message, contact, location_interval)
+    create_audit(db, principal, "remote.lost_mode", {"device_id": device_id})
+    db.close()
+    return result
+
+
+@app.post("/device/{device_id}/send-message")
+def device_send_message(
+    device_id: str,
+    message: str = Query(..., min_length=1, max_length=500),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    db = next(get_db())
+    device = db.get(Device, device_id)
+    if not device:
+        db.close()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
+    result = remote_commands.send_message(db, device, message)
+    db.close()
+    return result
+
+
+@app.get("/wifi/scan")
+def wifi_scan(
+    interface: str = Query("wlan0", max_length=32),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    create_audit(db := next(get_db()), principal, "wifi.scan", {"interface": interface})
+    db.close()
+    return wifi_security.scan_networks(interface)
+
+
+@app.post("/wifi/capture-handshake")
+def wifi_capture_handshake(
+    interface: str = Query(..., max_length=32),
+    bssid: str = Query(..., max_length=17),
+    duration: int = Query(30, ge=10, le=120),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    create_audit(db := next(get_db()), principal, "wifi.capture_handshake", {"interface": interface, "bssid": bssid})
+    db.close()
+    return wifi_security.capture_handshake(interface, bssid, duration)
+
+
+@app.post("/wifi/crack-wpa")
+def wifi_crack_wpa(
+    capture_file: str = Query(..., max_length=200),
+    wordlist: str = Query("/usr/share/wordlists/rockyou.txt", max_length=200),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    create_audit(db := next(get_db()), principal, "wifi.crack_wpa", {"capture_file": capture_file})
+    db.close()
+    return wifi_security.crack_wpa(capture_file, wordlist)
+
+
+@app.post("/wifi/wps-attack")
+def wifi_wps_attack(
+    interface: str = Query(..., max_length=32),
+    bssid: str = Query(..., max_length=17),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    create_audit(db := next(get_db()), principal, "wifi.wps_attack", {"interface": interface, "bssid": bssid})
+    db.close()
+    return wifi_security.wps_attack(interface, bssid)
+
+
+@app.post("/wifi/deauth")
+def wifi_deauth(
+    interface: str = Query(..., max_length=32),
+    bssid: str = Query(..., max_length=17),
+    count: int = Query(5, ge=1, le=20),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    create_audit(db := next(get_db()), principal, "wifi.deauth", {"interface": interface, "bssid": bssid})
+    db.close()
+    return wifi_security.deauth_attack(interface, bssid, count)
+
+
+@app.get("/firmware/cve")
+def firmware_cve_lookup(
+    keyword: str = Query(..., min_length=3, max_length=200),
+    limit: int = Query(10, ge=1, le=50),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    return firmware.lookup_cve(keyword, limit)
+
+
+@app.get("/firmware/diagnose/{ip}")
+def firmware_diagnose(
+    ip: str,
+    manufacturer: str = Query("", max_length=100),
+    model: str = Query("", max_length=100),
+    firmware_version: str = Query("", max_length=100),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    create_audit(db := next(get_db()), principal, "firmware.diagnose", {"ip": ip})
+    db.close()
+    return firmware.diagnose_firmware(ip, manufacturer, model, firmware_version)
+
+
+@app.get("/firmware/health/{ip}")
+def firmware_health(
+    ip: str,
+    principal: Principal = Depends(require_roles("viewer", "operator", "admin")),
+) -> dict:
+    return firmware.check_device_health(ip)
+
+
+@app.post("/vehicle/stolen-report")
+def vehicle_stolen_report(
+    device_id: str = Query(..., max_length=36),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    db = next(get_db())
+    result = vehicle_recovery.report_stolen(db, device_id, principal.subject)
+    create_audit(db, principal, "vehicle.stolen_report", {"device_id": device_id})
+    device = db.get(Device, device_id)
+    if device:
+        alert = Alert(
+            device_id=device_id,
+            alert_type="theft",
+            severity="critical",
+            title=f"Vehicle {device.name} reported stolen",
+            message=f"Reported by {principal.subject}. Recovery mode activated.",
+        )
+        db.add(alert)
+        db.commit()
+    db.close()
+    return result
+
+
+@app.get("/vehicle/recovery/{recovery_id}")
+def vehicle_recovery_status(
+    recovery_id: str,
+    principal: Principal = Depends(require_roles("viewer", "operator", "admin")),
+) -> dict:
+    db = next(get_db())
+    result = vehicle_recovery.get_recovery_status(db, recovery_id)
+    db.close()
+    return result
+
+
+@app.post("/vehicle/recovery/{recovery_id}/end")
+def vehicle_recovery_end(
+    recovery_id: str,
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    db = next(get_db())
+    result = vehicle_recovery.end_recovery(db, recovery_id)
+    create_audit(db, principal, "vehicle.recovery_end", {"recovery_id": recovery_id})
+    db.close()
+    return result
+
+
+@app.post("/vehicle/recovery/{recovery_id}/link-camera")
+def vehicle_link_camera(
+    recovery_id: str,
+    device_id: str = Query(..., max_length=36),
+    camera_ip: str = Query(..., max_length=45),
+    camera_port: int = Query(554, ge=1, le=65535),
+    stream_url: str = Query("", max_length=200),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    db = next(get_db())
+    result = vehicle_recovery.link_camera(db, recovery_id, device_id, camera_ip, camera_port, stream_url)
+    db.close()
+    return result
+
+
+@app.get("/vehicle/active-recoveries")
+def vehicle_active_recoveries(
+    principal: Principal = Depends(require_roles("viewer", "operator", "admin")),
+) -> dict:
+    db = next(get_db())
+    result = vehicle_recovery.list_active_recoveries(db)
+    db.close()
+    return {"recoveries": result}
+
+
+@app.get("/camera/stream/{camera_id}")
+def camera_stream_proxy(
+    camera_id: str,
+    rtsp_url: str = Query(..., max_length=200),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    return {"stream_url": rtsp_url, "proxy_url": f"/camera/proxy/{camera_id}", "note": "Use /camera/proxy for MJPEG stream"}
+
+
+@app.get("/alerts")
+def alerts_list(
+    limit: int = Query(50, ge=1, le=500),
+    severity: str | None = Query(None, max_length=20),
+    acknowledged: bool | None = Query(None),
+    principal: Principal = Depends(require_roles("viewer", "operator", "admin")),
+) -> dict:
+    db = next(get_db())
+    db.execute(text(
+        """
+        CREATE TABLE IF NOT EXISTS alerts (
+            id TEXT PRIMARY KEY, device_id TEXT, alert_type TEXT NOT NULL,
+            severity TEXT NOT NULL DEFAULT 'info', title TEXT NOT NULL,
+            message TEXT, acknowledged INTEGER DEFAULT 0,
+            metadata TEXT, created_at TIMESTAMP DEFAULT (datetime('now')),
+            acknowledged_at TIMESTAMP
+        )
+        """
+    ))
+    query = "SELECT id, device_id, alert_type, severity, title, message, acknowledged, created_at, acknowledged_at FROM alerts WHERE 1=1"
+    params: dict[str, Any] = {"limit": limit}
+    if severity:
+        query += " AND severity = :severity"
+        params["severity"] = severity
+    if acknowledged is not None:
+        query += " AND acknowledged = :acknowledged"
+        params["acknowledged"] = int(acknowledged)
+    query += " ORDER BY created_at DESC LIMIT :limit"
+    rows = db.execute(text(query), params).fetchall()
+    db.close()
+    return {
+        "alerts": [
+            {
+                "id": r[0], "device_id": r[1], "alert_type": r[2], "severity": r[3],
+                "title": r[4], "message": r[5], "acknowledged": bool(r[6]),
+                "created_at": str(r[7]),
+                "acknowledged_at": str(r[8]) if r[8] else None,
+            }
+            for r in rows
+        ]
+    }
+
+
+@app.post("/alerts/{alert_id}/acknowledge")
+def alert_acknowledge(
+    alert_id: str,
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    db = next(get_db())
+    db.execute(text("UPDATE alerts SET acknowledged = 1, acknowledged_at = datetime('now') WHERE id = :id"), {"id": alert_id})
+    db.commit()
+    db.close()
+    return {"alert_id": alert_id, "acknowledged": True}
+
+
+@app.post("/tasks/schedule")
+def task_schedule(
+    name: str = Query(..., min_length=1, max_length=120),
+    cron_expr: str = Query(..., min_length=5, max_length=50),
+    command_id: str = Query("", max_length=120),
+    principal: Principal = Depends(require_roles("admin")),
+) -> dict:
+    db = next(get_db())
+    result = scheduler.create_task(db, name, cron_expr, command_id)
+    create_audit(db, principal, "task.schedule", {"name": name, "cron_expr": cron_expr})
+    db.close()
+    return result
+
+
+@app.get("/tasks")
+def tasks_list(
+    principal: Principal = Depends(require_roles("viewer", "operator", "admin")),
+) -> dict:
+    db = next(get_db())
+    result = scheduler.list_tasks(db)
+    db.close()
+    return {"tasks": result}
+
+
+@app.put("/tasks/{task_id}/toggle")
+def task_toggle(
+    task_id: str,
+    enabled: bool = Query(...),
+    principal: Principal = Depends(require_roles("admin")),
+) -> dict:
+    db = next(get_db())
+    result = scheduler.toggle_task(db, task_id, enabled)
+    db.close()
+    return result
+
+
+@app.delete("/tasks/{task_id}")
+def task_delete(
+    task_id: str,
+    principal: Principal = Depends(require_roles("admin")),
+) -> dict:
+    db = next(get_db())
+    result = scheduler.delete_task(db, task_id)
+    db.close()
+    return result
+
+
+@app.post("/webhooks")
+def webhook_register(
+    url: str = Query(..., max_length=500),
+    events: str = Query("location.updated,geofence.breach,vehicle.stolen", max_length=500),
+    principal: Principal = Depends(require_roles("admin")),
+) -> dict:
+    db = next(get_db())
+    result = webhooks.register_endpoint(db, url, [e.strip() for e in events.split(",")])
+    create_audit(db, principal, "webhook.register", {"url": url})
+    db.close()
+    return result
+
+
+@app.get("/webhooks")
+def webhooks_list(
+    principal: Principal = Depends(require_roles("viewer", "operator", "admin")),
+) -> dict:
+    db = next(get_db())
+    result = webhooks.list_endpoints(db)
+    db.close()
+    return {"endpoints": result}
+
+
+@app.delete("/webhooks/{endpoint_id}")
+def webhook_delete(
+    endpoint_id: str,
+    principal: Principal = Depends(require_roles("admin")),
+) -> dict:
+    db = next(get_db())
+    result = webhooks.delete_endpoint(db, endpoint_id)
+    db.close()
+    return result
+
+
+@app.get("/webhooks/{endpoint_id}/deliveries")
+def webhook_deliveries(
+    endpoint_id: str,
+    limit: int = Query(50, ge=1, le=200),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    db = next(get_db())
+    result = webhooks.list_deliveries(db, endpoint_id, limit)
+    db.close()
+    return {"deliveries": result}
 
 
 _frontend_dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"

@@ -1,19 +1,29 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Monitor, Map, Menu, X, LogOut, Search } from "lucide-react";
 import AlertsLog from "./components/AlertsLog.jsx";
+import AlertsPanel from "./components/AlertsPanel.jsx";
 import BroadcastController from "./components/BroadcastController.jsx";
 import CameraPanel from "./components/CameraPanel.jsx";
 import DeviceList from "./components/DeviceList.jsx";
 import DeviceRegisterForm from "./components/DeviceRegisterForm.jsx";
+import DiscoveryPanel from "./components/DiscoveryPanel.jsx";
+import FingerprintPanel from "./components/FingerprintPanel.jsx";
 import ForensicsPanel from "./components/ForensicsPanel.jsx";
+import FirmwarePanel from "./components/FirmwarePanel.jsx";
+import GeofencePanel from "./components/GeofencePanel.jsx";
 import IDSPanel from "./components/IDSPanel.jsx";
 import LoginScreen from "./components/LoginScreen.jsx";
 import MapPanel from "./components/MapPanel.jsx";
 import OSINTPanel from "./components/OSINTPanel.jsx";
+import RemotePanel from "./components/RemotePanel.jsx";
 import ScanPanel from "./components/ScanPanel.jsx";
+import SchedulerPanel from "./components/SchedulerPanel.jsx";
 import TerminalPanel from "./components/TerminalPanel.jsx";
 import VPNPanel from "./components/VPNPanel.jsx";
+import VehicleRecoveryPanel from "./components/VehicleRecoveryPanel.jsx";
+import WebhookPanel from "./components/WebhookPanel.jsx";
 import WebScanPanel from "./components/WebScanPanel.jsx";
+import WifiPanel from "./components/WifiPanel.jsx";
 import { api, getAuthToken, setAuthToken, WS_URL } from "./lib/api.js";
 
 function hashLine(value) {
@@ -35,6 +45,16 @@ const PANEL_TABS = [
   { id: "vpn", label: "VPN" },
   { id: "ids", label: "IDS" },
   { id: "forensics", label: "FORE" },
+  { id: "remote", label: "REM" },
+  { id: "fingerprint", label: "FP" },
+  { id: "discovery", label: "DISC" },
+  { id: "wifi", label: "WIFI" },
+  { id: "firmware", label: "FW" },
+  { id: "vehicle", label: "VHC" },
+  { id: "geofence", label: "GEO" },
+  { id: "alerts", label: "ALRT" },
+  { id: "scheduler", label: "TASK" },
+  { id: "webhooks", label: "HOOK" },
 ];
 
 export default function App() {
@@ -254,6 +274,16 @@ export default function App() {
                 {activePanel === "vpn" && <VPNPanel />}
                 {activePanel === "ids" && <IDSPanel />}
                 {activePanel === "forensics" && <ForensicsPanel />}
+                {activePanel === "remote" && <RemotePanel device={selectedDevice} />}
+                {activePanel === "fingerprint" && <FingerprintPanel device={selectedDevice} />}
+                {activePanel === "discovery" && <DiscoveryPanel />}
+                {activePanel === "wifi" && <WifiPanel />}
+                {activePanel === "firmware" && <FirmwarePanel device={selectedDevice} />}
+                {activePanel === "vehicle" && <VehicleRecoveryPanel device={selectedDevice} />}
+                {activePanel === "geofence" && <GeofencePanel />}
+                {activePanel === "alerts" && <AlertsPanel />}
+                {activePanel === "scheduler" && <SchedulerPanel />}
+                {activePanel === "webhooks" && <WebhookPanel />}
               </div>
               <BroadcastController onEvent={(event) => setEvents((items) => [event, ...items])} />
               <DeviceRegisterForm

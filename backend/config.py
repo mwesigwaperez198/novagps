@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     mqtt_username: str = Field("", alias="MQTT_USERNAME")
     mqtt_password: str = Field("", alias="MQTT_PASSWORD")
 
+    africastalking_api_key: str = Field("", alias="AFRICASTALKING_API_KEY")
+    africastalking_username: str = Field("sandbox", alias="AFRICASTALKING_USERNAME")
+    africastalking_sender_id: str = Field("", alias="AFRICASTALKING_SENDER_ID")
+    sms_gateway_url: str = Field("", alias="SMS_GATEWAY_URL")
+    sms_api_key: str = Field("", alias="SMS_API_KEY")
+
     @model_validator(mode="after")
     def apply_portable_defaults(self) -> "Settings":
         if self.nova_mode not in {"portable", "full"}:
