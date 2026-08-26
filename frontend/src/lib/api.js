@@ -74,6 +74,8 @@ export const api = {
   osintSublist3r: (domain) => request(`/osint/sublist3r?domain=${encodeURIComponent(domain)}`),
   pentestVulnScan: (target) => request(`/pentest/vuln-scan?target=${encodeURIComponent(target)}`),
   pentestAuthScan: (target) => request(`/pentest/auth-scan?target=${encodeURIComponent(target)}`),
+  osintPhoneLookup: (phone, countryCode = "") => request(`/osint/phone-lookup?phone=${encodeURIComponent(phone)}&country_code=${encodeURIComponent(countryCode)}`),
+  osintEmailLookup: (email) => request(`/osint/email-lookup?email=${encodeURIComponent(email)}`),
   toolRun: (commandId, params = {}) => {
     const qs = new URLSearchParams({ command_id: commandId, ...params });
     return request(`/tool/run?${qs}`, { method: "POST" });

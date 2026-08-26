@@ -883,6 +883,23 @@ def osint_theharvester(
     return osint.scan_theharvester(domain)
 
 
+@app.get("/osint/phone-lookup")
+def osint_phone_lookup(
+    phone: str = Query(..., max_length=30),
+    country_code: str = Query("", max_length=5),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    return osint.phone_lookup(phone, country_code)
+
+
+@app.get("/osint/email-lookup")
+def osint_email_lookup(
+    email: str = Query(..., max_length=120),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    return osint.email_lookup(email)
+
+
 @app.get("/osint/whatweb")
 def osint_whatweb(
     url: str = Query(..., max_length=500),
