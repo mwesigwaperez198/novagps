@@ -24,3 +24,4 @@ build/
 !portable/
 *.sqlite3-journal
 nova.vc
+backend/data/nova.sqlite3

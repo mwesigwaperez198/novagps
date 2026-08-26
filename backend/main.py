@@ -21,6 +21,7 @@ from command_registry import CommandRegistryError, execute_registered_command
 from config import get_settings
 from db import get_db, init_db
 from eventbus import bus
+from jose import jwt
 from kafka_producer import publish_location_event
 from models import (
     AuditLog,
@@ -46,6 +47,12 @@ from schemas import (
     LocationUpdateRequest,
 )
 from tool_registry import TOOL_REGISTRY, tool_available
+
+import camera
+import vpn
+import ids
+import osint
+from worker.geofence import list_geofences_as_dicts
 
 
 settings = get_settings()
@@ -91,6 +98,25 @@ async def rate_limit(request: Request, call_next):
         return JSONResponse(status_code=status.HTTP_429_TOO_MANY_REQUESTS, content={"detail": "Rate limit exceeded"})
     RATE_BUCKET[key].append(now)
     return await call_next(request)
+
+
+@app.post("/auth/login")
+def auth_login(
+    request_body: dict[str, str] = {},
+) -> dict[str, str]:
+    email = request_body.get("email", "")
+    password = request_body.get("password", "")
+    if not email or not password:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email and password are required")
+    settings = get_settings()
+    if settings.environment == "development":
+        token = jwt.encode(
+            {"sub": email, "role": "admin"},
+            settings.secret_key,
+            algorithm=settings.jwt_algorithm,
+        )
+        return {"access_token": token, "token_type": "bearer", "role": "admin", "email": email}
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
 
 def hash_text(value: str | None) -> str | None:
@@ -650,6 +676,135 @@ def run_retention(
     create_audit(db, principal, "retention.run", {"cutoff": cutoff.isoformat(), "deleted": result.rowcount})
     db.commit()
     return {"deleted_locations": result.rowcount, "cutoff": cutoff}
+
+
+@app.get("/camera/discover")
+def camera_discover(
+    subnet: str = Query("192.168.1.0/24", max_length=60),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    create_audit(db := next(get_db()), principal, "camera.discover", {"subnet": subnet})
+    db.close()
+    return {"cameras": camera.discover_cameras(subnet)}
+
+
+@app.post("/camera/screenshot")
+def camera_screenshot(
+    rtsp_url: str = Query(..., max_length=200),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    return camera.capture_screenshot(rtsp_url)
+
+
+@app.post("/camera/record")
+def camera_record(
+    rtsp_url: str = Query(..., max_length=200),
+    duration: int = Query(30, ge=1, le=300),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    return camera.start_recording(rtsp_url, duration)
+
+
+@app.get("/vpn/status")
+def vpn_status(
+    principal: Principal = Depends(require_roles("viewer", "operator", "admin")),
+) -> dict:
+    return vpn.get_vpn_status()
+
+
+@app.post("/vpn/connect")
+def vpn_connect(
+    config_path: str = Query(..., max_length=200),
+    vpn_type: str = Query("wireguard", max_length=20),
+    principal: Principal = Depends(require_roles("admin")),
+) -> dict:
+    return vpn.connect_vpn(config_path, vpn_type)
+
+
+@app.post("/vpn/disconnect")
+def vpn_disconnect(
+    interface: str = Query(..., max_length=30),
+    vpn_type: str = Query("wireguard", max_length=20),
+    principal: Principal = Depends(require_roles("admin")),
+) -> dict:
+    return vpn.disconnect_vpn(interface, vpn_type)
+
+
+@app.get("/ids/status")
+def ids_status(
+    principal: Principal = Depends(require_roles("viewer", "operator", "admin")),
+) -> dict:
+    return ids.get_ids_status()
+
+
+@app.get("/ids/alerts")
+def ids_alerts(
+    limit: int = Query(50, ge=1, le=500),
+    principal: Principal = Depends(require_roles("auditor", "operator", "admin")),
+) -> dict:
+    return {"alerts": ids.get_recent_alerts(limit)}
+
+
+@app.post("/ids/update-rules")
+def ids_update_rules(
+    principal: Principal = Depends(require_roles("admin")),
+) -> dict:
+    return ids.update_rules()
+
+
+@app.get("/osint/whois")
+def osint_whois(
+    domain: str = Query(..., max_length=120),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    return osint.whois_lookup(domain)
+
+
+@app.get("/osint/dns-brute")
+def osint_dns_brute(
+    domain: str = Query(..., max_length=120),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    return osint.dns_bruteforce(domain)
+
+
+@app.get("/osint/reverse-dns")
+def osint_reverse_dns(
+    ip: str = Query(..., max_length=45),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    return osint.reverse_dns(ip)
+
+
+@app.get("/osint/http-headers")
+def osint_http_headers(
+    url: str = Query(..., max_length=500),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    return osint.http_headers(url)
+
+
+@app.get("/osint/nikto")
+def osint_nikto(
+    target: str = Query(..., max_length=120),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    return osint.scan_nikto(target)
+
+
+@app.get("/osint/sqlmap")
+def osint_sqlmap(
+    url: str = Query(..., max_length=500),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict:
+    return osint.scan_sqlmap(url)
+
+
+@app.get("/geofences")
+def geofences_list(
+    principal: Principal = Depends(require_roles("viewer", "operator", "admin")),
+) -> dict:
+    return {"geofences": list_geofences_as_dicts()}
 
 
 _frontend_dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"

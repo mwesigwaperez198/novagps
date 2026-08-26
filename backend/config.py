@@ -32,10 +32,15 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=False, extra="ignore")
 
+    mqtt_username: str = Field("", alias="MQTT_USERNAME")
+    mqtt_password: str = Field("", alias="MQTT_PASSWORD")
+
     @model_validator(mode="after")
     def apply_portable_defaults(self) -> "Settings":
         if self.nova_mode not in {"portable", "full"}:
             raise ValueError("NOVA_MODE must be 'portable' or 'full'")
+        if self.environment == "production" and self.secret_key == "replace_with_secure_random":
+            raise ValueError("SECRET_KEY must be set to a secure random value in production")
         if not self.database_url:
             base = Path(self.data_dir) if self.data_dir else Path("data")
             base.mkdir(parents=True, exist_ok=True)

@@ -4,13 +4,12 @@ import { FitAddon } from "xterm-addon-fit";
 import { Terminal } from "xterm";
 import { api } from "../lib/api.js";
 
-const COMMANDS = ["system.health", "dns.config", "route.table", "echo.hash"];
-
 export default function TerminalPanel() {
   const terminalRef = useRef(null);
   const xtermRef = useRef(null);
-  const [commandId, setCommandId] = useState("system.health");
+  const [commandId, setCommandId] = useState("system.info");
   const [label, setLabel] = useState("nova-trace");
+  const [tools, setTools] = useState([]);
 
   useEffect(() => {
     const term = new Terminal({
@@ -40,6 +39,12 @@ export default function TerminalPanel() {
     };
   }, []);
 
+  useEffect(() => {
+    api.tools().then((data) => {
+      if (data.tools) setTools(data.tools);
+    }).catch(() => {});
+  }, []);
+
   async function runCommand() {
     const args = commandId === "echo.hash" ? { label } : {};
     xtermRef.current?.writeln(`$ diagnose ${commandId}`);
@@ -62,9 +67,15 @@ export default function TerminalPanel() {
       </div>
       <div className="command-row">
         <select value={commandId} onChange={(event) => setCommandId(event.target.value)}>
-          {COMMANDS.map((command) => (
-            <option key={command}>{command}</option>
-          ))}
+          {tools.length > 0
+            ? tools.map((tool) => (
+                <option key={tool.command_id} value={tool.command_id}>
+                  {tool.command_id} {!tool.available ? "(MISSING)" : ""}
+                </option>
+              ))
+            : ["system.info", "dns.lookup", "net.stat.connections", "net.scan.topports", "forensics.hash.file"].map((cmd) => (
+                <option key={cmd} value={cmd}>{cmd}</option>
+              ))}
         </select>
         <input value={label} onChange={(event) => setLabel(event.target.value)} disabled={commandId !== "echo.hash"} />
       </div>

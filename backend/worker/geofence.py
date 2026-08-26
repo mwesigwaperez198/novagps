@@ -74,3 +74,25 @@ def check_event_against_geofences(db: Session, device_id: str, longitude: float,
         if inside:
             matches.append({"device_id": device_id, "geofence_id": fence.geofence_id, "name": fence.name})
     return matches
+
+
+def parse_wkt_polygon(polygon_wkt: str) -> list[dict]:
+    body = polygon_wkt[polygon_wkt.find("((") + 2 : polygon_wkt.rfind("))")]
+    coords = []
+    for chunk in body.split(","):
+        parts = chunk.split()
+        if len(parts) >= 2:
+            coords.append({"longitude": float(parts[0]), "latitude": float(parts[1])})
+    return coords
+
+
+def list_geofences_as_dicts() -> list[dict]:
+    return [
+        {
+            "geofence_id": f.geofence_id,
+            "name": f.name,
+            "polygon_wkt": f.polygon_wkt,
+            "coords": parse_wkt_polygon(f.polygon_wkt),
+        }
+        for f in DEFAULT_GEOFENCES
+    ]

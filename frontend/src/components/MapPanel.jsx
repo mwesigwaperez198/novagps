@@ -97,6 +97,14 @@ function buildRing(radius, color, opacity) {
   return ring;
 }
 
+function speedToColor(speed) {
+  if (speed === null || speed === undefined) return 0x40d7ff;
+  if (speed < 20) return 0x29e06b;
+  if (speed < 50) return 0xf2d96b;
+  if (speed < 80) return 0xf2896b;
+  return 0xe04040;
+}
+
 function buildDeviceBeacon(point, deviceType) {
   const marker = new THREE.Group();
   marker.position.set(point.x, point.y, point.z);
@@ -162,13 +170,109 @@ function buildDeviceBeacon(point, deviceType) {
   return marker;
 }
 
-function cameraTarget(points) {
-  if (!points.length) return { x: 0, y: 8, z: 0, radius: 120 };
-  let minX = points[0].x;
-  let maxX = points[0].x;
-  let minZ = points[0].z;
-  let maxZ = points[0].z;
-  let maxY = points[0].y;
+function buildCameraMarker(projected, origin) {
+  const group = new THREE.Group();
+  group.position.set(projected.x, 3, projected.z);
+
+  const poleGeo = new THREE.CylinderGeometry(0.4, 0.5, 12, 8);
+  const poleMat = new THREE.MeshStandardMaterial({ color: 0x666666, metalness: 0.6, roughness: 0.3 });
+  const pole = new THREE.Mesh(poleGeo, poleMat);
+  pole.position.y = 6;
+  group.add(pole);
+
+  const headGeo = new THREE.BoxGeometry(3.2, 2.4, 2.4);
+  const headMat = new THREE.MeshStandardMaterial({ color: 0xcc2222, metalness: 0.4, roughness: 0.4, emissive: 0xcc2222, emissiveIntensity: 0.2 });
+  const head = new THREE.Mesh(headGeo, headMat);
+  head.position.y = 13;
+  group.add(head);
+
+  const lensGeo = new THREE.CylinderGeometry(0.7, 1.0, 3.6, 12);
+  const lensMat = new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.8, roughness: 0.15 });
+  const lens = new THREE.Mesh(lensGeo, lensMat);
+  lens.rotation.x = Math.PI / 2;
+  lens.position.set(0, 13, -2.4);
+  group.add(lens);
+
+  const lightGeo = new THREE.SphereGeometry(0.6, 12, 8);
+  const lightMat = new THREE.MeshBasicMaterial({ color: 0xff3333, transparent: true, opacity: 0.9 });
+  const light = new THREE.Mesh(lightGeo, lightMat);
+  light.position.set(1.2, 14.6, 0);
+  light.name = "camera-recording";
+  group.add(light);
+
+  const coverageGeo = new THREE.ConeGeometry(14, 30, 16, 1, true);
+  const coverageMat = new THREE.MeshBasicMaterial({
+    color: 0xff4444,
+    transparent: true,
+    opacity: 0.06,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const coverage = new THREE.Mesh(coverageGeo, coverageMat);
+  coverage.rotation.x = Math.PI / 2;
+  coverage.position.set(0, 13, -18);
+  group.add(coverage);
+
+  return group;
+}
+
+function buildGeofencePolygon(coords, origin, color, opacity) {
+  if (!coords || coords.length < 3) return null;
+
+  const latitudeScale = METERS_PER_DEGREE_LATITUDE;
+  const longitudeScale = METERS_PER_DEGREE_LATITUDE * Math.cos((origin.latitude * Math.PI) / 180);
+
+  const points3d = coords.map((c) => {
+    const x = ((c.longitude - origin.longitude) * longitudeScale) / SCENE_UNIT_METERS;
+    const z = -((c.latitude - origin.latitude) * latitudeScale) / SCENE_UNIT_METERS;
+    return new THREE.Vector3(x, 0.3, z);
+  });
+
+  const group = new THREE.Group();
+
+  const shapePoints = points3d.map((p) => new THREE.Vector2(p.x, p.z));
+  const shape = new THREE.Shape(shapePoints);
+  const fillGeo = new THREE.ShapeGeometry(shape);
+  const fillMat = new THREE.MeshBasicMaterial({
+    color,
+    transparent: true,
+    opacity: opacity * 0.35,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const fill = new THREE.Mesh(fillGeo, fillMat);
+  fill.rotation.x = -Math.PI / 2;
+  fill.position.y = 0.2;
+  group.add(fill);
+
+  const linePoints = [...points3d, points3d[0].clone()];
+  const lineGeo = new THREE.BufferGeometry().setFromPoints(linePoints);
+  const lineMat = new THREE.LineBasicMaterial({
+    color,
+    transparent: true,
+    opacity,
+    linewidth: 2,
+  });
+  const line = new THREE.Line(lineGeo, lineMat);
+  group.add(line);
+
+  points3d.forEach((p) => {
+    const markerGeo = new THREE.SphereGeometry(1.0, 8, 6);
+    const markerMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.8 });
+    const marker = new THREE.Mesh(markerGeo, markerMat);
+    marker.position.copy(p);
+    marker.position.y = 0.8;
+    group.add(marker);
+  });
+
+  return group;
+}
+
+function cameraTarget(points, geofenceGroups) {
+  if (!points.length && !geofenceGroups.length) return { x: 0, y: 8, z: 0, radius: 120 };
+
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity, maxY = 0;
+
   points.forEach((point) => {
     minX = Math.min(minX, point.x);
     maxX = Math.max(maxX, point.x);
@@ -176,6 +280,21 @@ function cameraTarget(points) {
     maxZ = Math.max(maxZ, point.z);
     maxY = Math.max(maxY, point.y);
   });
+
+  geofenceGroups.forEach((group) => {
+    group.traverse((child) => {
+      if (child.isMesh && child.geometry) {
+        const pos = child.position;
+        minX = Math.min(minX, pos.x);
+        maxX = Math.max(maxX, pos.x);
+        minZ = Math.min(minZ, pos.z);
+        maxZ = Math.max(maxZ, pos.z);
+      }
+    });
+  });
+
+  if (minX === Infinity) return { x: 0, y: 8, z: 0, radius: 120 };
+
   const width = maxX - minX;
   const depth = maxZ - minZ;
   return {
@@ -213,6 +332,8 @@ export default function MapPanel({ device }) {
   const animationRef = useRef(null);
   const [routeHistory, setRouteHistory] = useState([]);
   const [cameraMode, setCameraMode] = useState("follow");
+  const [geofences, setGeofences] = useState([]);
+  const [cameras, setCameras] = useState([]);
 
   const sourceLocation = device?.latest_location;
   const liveLocation = useMemo(
@@ -241,20 +362,18 @@ export default function MapPanel({ device }) {
   useEffect(() => {
     let active = true;
     setRouteHistory([]);
-    if (!device?.id) return () => {
-      active = false;
-    };
+    if (!device?.id) return () => { active = false; };
     api.locations(device.id, 160)
-      .then((items) => {
-        if (active) setRouteHistory(items);
-      })
-      .catch(() => {
-        if (active) setRouteHistory([]);
-      });
-    return () => {
-      active = false;
-    };
+      .then((items) => { if (active) setRouteHistory(items); })
+      .catch(() => { if (active) setRouteHistory([]); });
+    return () => { active = false; };
   }, [device?.id]);
+
+  useEffect(() => {
+    api.geofences()
+      .then((data) => setGeofences(data.geofences || []))
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     modeRef.current = cameraMode;
@@ -334,7 +453,9 @@ export default function MapPanel({ device }) {
     const routeGroup = new THREE.Group();
     const markerGroup = new THREE.Group();
     const telemetryGroup = new THREE.Group();
-    scene.add(routeGroup, markerGroup, telemetryGroup);
+    const geofenceGroup = new THREE.Group();
+    const cameraMarkerGroup = new THREE.Group();
+    scene.add(routeGroup, markerGroup, telemetryGroup, geofenceGroup, cameraMarkerGroup);
 
     function resize() {
       const width = Math.max(1, mount.clientWidth);
@@ -355,6 +476,14 @@ export default function MapPanel({ device }) {
           }
         });
       });
+      cameraMarkerGroup.children.forEach((cam) => {
+        cam.children.forEach((child) => {
+          if (child.name === "camera-recording") {
+            const blink = Math.sin(time * 0.005) > 0 ? 1.0 : 0.2;
+            child.material.opacity = blink;
+          }
+        });
+      });
       if (modeRef.current === "orbit") {
         const focus = focusRef.current;
         const orbit = time * 0.00024;
@@ -372,7 +501,7 @@ export default function MapPanel({ device }) {
 
     resize();
     window.addEventListener("resize", resize);
-    sceneRef.current = { scene, camera, renderer, routeGroup, markerGroup, telemetryGroup, resize };
+    sceneRef.current = { scene, camera, renderer, routeGroup, markerGroup, telemetryGroup, geofenceGroup, cameraMarkerGroup, resize };
     positionCamera(camera, "follow", focusRef.current, null);
     animationRef.current = requestAnimationFrame(animate);
 
@@ -383,6 +512,8 @@ export default function MapPanel({ device }) {
       clearGroup(routeGroup);
       clearGroup(markerGroup);
       clearGroup(telemetryGroup);
+      clearGroup(geofenceGroup);
+      clearGroup(cameraMarkerGroup);
       disposeObject(plane);
       grid.geometry.dispose();
       disposeMaterial(grid.material);
@@ -399,7 +530,7 @@ export default function MapPanel({ device }) {
     const sceneState = sceneRef.current;
     if (!sceneState) return;
 
-    const { routeGroup, markerGroup, telemetryGroup, camera } = sceneState;
+    const { routeGroup, markerGroup, telemetryGroup, geofenceGroup, cameraMarkerGroup, camera } = sceneState;
     clearGroup(routeGroup);
     clearGroup(markerGroup);
     clearGroup(telemetryGroup);
@@ -407,36 +538,61 @@ export default function MapPanel({ device }) {
     const origin = chooseOrigin(path);
     const projected = path.map((location) => projectLocation(location, origin));
     const projectedLatest = projected[projected.length - 1] || null;
-    const focus = cameraTarget(projected);
+
+    clearGroup(geofenceGroup);
+    geofences.forEach((fence) => {
+      if (fence.coords && fence.coords.length >= 3) {
+        const colors = [0x40d7ff, 0x29e06b, 0xf2d96b, 0xe04040, 0x9b59b6];
+        const idx = geofences.indexOf(fence) % colors.length;
+        const poly = buildGeofencePolygon(fence.coords, origin, colors[idx], 0.7);
+        if (poly) {
+          geofenceGroup.add(poly);
+        }
+      }
+    });
+
+    clearGroup(cameraMarkerGroup);
+    cameras.forEach((cam) => {
+      const camLat = cam.latitude || cam.lat;
+      const camLng = cam.longitude || cam.lng || cam.lon;
+      if (camLat && camLng) {
+        const projectedCam = projectLocation({ latitude: camLat, longitude: camLng, altitude: 0, speed: 0, heading: 0 }, origin);
+        const marker = buildCameraMarker(projectedCam, origin);
+        cameraMarkerGroup.add(marker);
+      }
+    });
+
+    const focus = cameraTarget(projected, [geofenceGroup]);
     focusRef.current = focus;
     latestRef.current = projectedLatest;
 
     if (projected.length >= 2) {
-      const routePoints = projected.map((point) => new THREE.Vector3(point.x, point.y + 0.6, point.z));
-      const routeGeometry = new THREE.BufferGeometry().setFromPoints(routePoints);
-      const routeMaterial = new THREE.LineBasicMaterial({
-        color: 0x40d7ff,
-        transparent: true,
-        opacity: 0.88,
-      });
-      routeGroup.add(new THREE.Line(routeGeometry, routeMaterial));
+      for (let i = 1; i < projected.length; i++) {
+        const p0 = projected[i - 1];
+        const p1 = projected[i];
+        const segColor = speedToColor(p1.speed);
+        const segPoints = [
+          new THREE.Vector3(p0.x, p0.y + 0.6, p0.z),
+          new THREE.Vector3(p1.x, p1.y + 0.6, p1.z),
+        ];
+        const segGeo = new THREE.BufferGeometry().setFromPoints(segPoints);
+        const segMat = new THREE.LineBasicMaterial({ color: segColor, transparent: true, opacity: 0.88 });
+        routeGroup.add(new THREE.Line(segGeo, segMat));
 
-      const glowGeometry = new THREE.BufferGeometry().setFromPoints(routePoints);
-      const glowMaterial = new THREE.LineBasicMaterial({
-        color: 0x29e06b,
-        transparent: true,
-        opacity: 0.28,
-      });
-      const glow = new THREE.Line(glowGeometry, glowMaterial);
-      glow.scale.set(1.006, 1.006, 1.006);
-      routeGroup.add(glow);
+        const glowMat = new THREE.LineBasicMaterial({ color: segColor, transparent: true, opacity: 0.22 });
+        const glowGeo = new THREE.BufferGeometry().setFromPoints(segPoints);
+        const glow = new THREE.Line(glowGeo, glowMat);
+        glow.scale.set(1.006, 1.006, 1.006);
+        routeGroup.add(glow);
+      }
     }
 
     projected.slice(-34).forEach((point, index, items) => {
       const intensity = (index + 1) / items.length;
+      const breadcrumbColor = speedToColor(point.speed);
       const breadcrumbGeometry = new THREE.SphereGeometry(1.2 + intensity * 0.8, 14, 10);
       const breadcrumbMaterial = new THREE.MeshBasicMaterial({
-        color: index === items.length - 1 ? 0xf2d96b : 0x6fffb1,
+        color: index === items.length - 1 ? 0xf2d96b : breadcrumbColor,
         transparent: true,
         opacity: 0.2 + intensity * 0.56,
       });
@@ -448,7 +604,7 @@ export default function MapPanel({ device }) {
         const columnHeight = point.y;
         const columnGeometry = new THREE.CylinderGeometry(0.28, 0.55, columnHeight, 8);
         const columnMaterial = new THREE.MeshBasicMaterial({
-          color: 0x40d7ff,
+          color: breadcrumbColor,
           transparent: true,
           opacity: 0.08 + intensity * 0.2,
         });
@@ -469,7 +625,7 @@ export default function MapPanel({ device }) {
     }
 
     positionCamera(camera, modeRef.current, focus, projectedLatest);
-  }, [device?.device_type, path]);
+  }, [device?.device_type, path, geofences, cameras]);
 
   const modeIcons = {
     follow: Navigation,
@@ -478,6 +634,7 @@ export default function MapPanel({ device }) {
   };
 
   const coordinateLabel = latest ? `${latest.latitude.toFixed(5)},${latest.longitude.toFixed(5)}` : "WAITING_FOR_SIGNAL";
+  const trailPoints = path.length;
 
   return (
     <section className="panel map-panel mission-panel">
@@ -527,9 +684,27 @@ export default function MapPanel({ device }) {
           </div>
           <div>
             <span>TRAIL</span>
-            <strong>{path.length.toString().padStart(3, "0")}</strong>
+            <strong>{trailPoints.toString().padStart(3, "0")}</strong>
+          </div>
+          <div>
+            <span>FENCE</span>
+            <strong>{geofences.length}</strong>
+          </div>
+          <div>
+            <span>CAM</span>
+            <strong>{cameras.length}</strong>
           </div>
         </div>
+        {geofences.length > 0 && (
+          <div className="mission-legend">
+            {geofences.map((f, i) => (
+              <div key={f.geofence_id} className="legend-item">
+                <span className="legend-color" style={{ background: ["#40d7ff", "#29e06b", "#f2d96b", "#e04040", "#9b59b6"][i % 5] }} />
+                {f.name}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </section>
   );
