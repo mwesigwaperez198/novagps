@@ -177,6 +177,12 @@ select {
   white-space: nowrap;
 }
 
+.device-place {
+  color: var(--line-hot) !important;
+  font-size: 10px;
+  font-weight: 600;
+}
+
 .device-type {
   color: var(--amber);
   font-size: 11px;

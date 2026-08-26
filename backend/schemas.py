@@ -13,6 +13,8 @@ class DeviceRegisterRequest(BaseModel):
     phone: str = Field(..., min_length=3, max_length=64)
     identifier: str | None = Field(None, min_length=3, max_length=160)
     serial: str | None = Field(None, max_length=160)
+    imei: str | None = Field(None, max_length=32)
+    model: str | None = Field(None, max_length=160)
     device_type: DeviceType = DeviceType.other
     consent_source: str | None = Field(None, max_length=120)
     consent_scope: str | None = Field(None, max_length=1000)
@@ -39,6 +41,7 @@ class LocationUpdateRequest(BaseModel):
     speed: float | None = Field(None, ge=0)
     heading: float | None = Field(None, ge=0, le=360)
     accuracy: float | None = Field(None, ge=0)
+    place_name: str | None = Field(None, max_length=500)
     source: Literal["http", "mobile", "traccar", "iot", "mqtt", "lorawan", "lte-m", "nb-iot"] = "http"
     recorded_at: datetime | None = None
     raw_payload: dict[str, Any] | None = None
@@ -57,6 +60,8 @@ class DeviceResponse(BaseModel):
     phone: str
     identifier: str
     serial: str | None
+    imei: str | None
+    model: str | None
     device_type: DeviceType
     is_active: bool
     created_at: datetime

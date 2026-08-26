@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import re
 import secrets
 from datetime import datetime, timedelta
@@ -7,6 +8,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
+import requests as http_requests
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -84,6 +86,25 @@ def startup_event() -> None:
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9_.:@-]{3,160}$")
 SQL_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,119}$")
 RATE_BUCKET: dict[str, list[datetime]] = {}
+logger = logging.getLogger("nova.main")
+
+
+def reverse_geocode(latitude: float, longitude: float) -> str | None:
+    try:
+        resp = http_requests.get(
+            "https://nominatim.openstreetmap.org/reverse",
+            params={"lat": latitude, "lon": longitude, "format": "json"},
+            headers={"User-Agent": "NOVA-GPS/1.0"},
+            timeout=4,
+        )
+        logger.info("geocode status=%s lat=%s lon=%s", resp.status_code, latitude, longitude)
+        if resp.ok:
+            name = resp.json().get("display_name")
+            logger.info("geocode result=%s", name)
+            return name
+    except Exception as exc:
+        logger.warning("geocode failed: %s", exc)
+    return None
 
 
 @app.middleware("http")
@@ -142,6 +163,7 @@ def latest_location_dict(db: Session, device_id: str) -> dict[str, Any] | None:
         "speed": location.speed,
         "heading": location.heading,
         "accuracy": location.accuracy,
+        "place_name": location.place_name,
         "source": location.source,
         "recorded_at": location.recorded_at,
         "received_at": location.received_at,
@@ -157,6 +179,8 @@ def device_response(db: Session, device: Device) -> DeviceResponse:
             "phone": device.phone,
             "identifier": device.identifier,
             "serial": device.serial,
+            "imei": device.imei,
+            "model": device.model,
             "device_type": device.device_type,
             "is_active": device.is_active,
             "created_at": device.created_at,
@@ -238,6 +262,8 @@ def register_device(
         phone=payload.phone,
         identifier=identifier,
         serial=payload.serial,
+        imei=payload.imei,
+        model=payload.model,
         device_type=payload.device_type,
     )
     db.add(device)
@@ -309,6 +335,7 @@ def update_location(
     device = resolve_device(db, payload)
     require_active_consent(db, device)
     recorded_at = payload.recorded_at or utcnow()
+    place_name = payload.place_name or reverse_geocode(payload.latitude, payload.longitude)
     location = Location(
         device_id=device.id,
         latitude=payload.latitude,
@@ -317,6 +344,7 @@ def update_location(
         speed=payload.speed,
         heading=payload.heading,
         accuracy=payload.accuracy,
+        place_name=place_name,
         source=payload.source,
         geom=f"POINT({payload.longitude} {payload.latitude})",
         recorded_at=recorded_at,
@@ -336,21 +364,62 @@ def update_location(
         "speed": location.speed,
         "heading": location.heading,
         "accuracy": location.accuracy,
+        "place_name": place_name,
         "source": location.source,
         "recorded_at": location.recorded_at.isoformat(),
         "received_at": location.received_at.isoformat(),
     }
     kafka_published = publish_location_event(event)
     if settings.database_is_sqlite:
-        import logging
-
         from worker.geofence import check_event_against_geofences_local
 
-        logging.getLogger("nova.geofence").info(
+        logger.info(
             "geofence matches=%s",
             check_event_against_geofences_local(device.id, payload.longitude, payload.latitude),
         )
-    return {"status": "accepted", "location_id": location.id, "kafka_published": kafka_published}
+    return {"status": "accepted", "location_id": location.id, "place_name": place_name, "kafka_published": kafka_published}
+
+
+@app.post("/device/locate", status_code=status.HTTP_202_ACCEPTED)
+def device_self_locate(
+    identifier: str = Query(..., min_length=3, max_length=160),
+    latitude: float = Query(..., ge=-90, le=90),
+    longitude: float = Query(..., ge=-180, le=180),
+    altitude: float | None = Query(None),
+    speed: float | None = Query(None, ge=0),
+    heading: float | None = Query(None, ge=0, le=360),
+    accuracy: float | None = Query(None, ge=0),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    device = db.query(Device).filter(Device.identifier == identifier, Device.is_active.is_(True)).first()
+    if not device:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found or inactive")
+    require_active_consent(db, device)
+    place_name = reverse_geocode(latitude, longitude)
+    location = Location(
+        device_id=device.id,
+        latitude=latitude,
+        longitude=longitude,
+        altitude=altitude,
+        speed=speed,
+        heading=heading,
+        accuracy=accuracy,
+        place_name=place_name,
+        source="mobile",
+        geom=f"POINT({longitude} {latitude})",
+        recorded_at=utcnow(),
+    )
+    db.add(location)
+    db.commit()
+    db.refresh(location)
+    return {
+        "status": "accepted",
+        "location_id": location.id,
+        "device_name": device.name,
+        "place_name": place_name,
+        "latitude": latitude,
+        "longitude": longitude,
+    }
 
 
 @app.get("/traccar", status_code=status.HTTP_202_ACCEPTED)
