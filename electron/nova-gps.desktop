@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=NOVA GPS
+GenericName=GPS Tracking Workbench
+Comment=Real-time GPS tracking, OSINT, and security analysis platform
+Exec=/opt/nova/start_nova.sh
+Icon=nova-gps
+Terminal=false
+StartupNotify=true
+Categories=Security;Utility;Network;
+Keywords=gps;tracking;osint;security;forensics;
+MimeType=x-scheme-handler/http;

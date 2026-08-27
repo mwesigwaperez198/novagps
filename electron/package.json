@@ -1,0 +1,82 @@
+{
+  "name": "nova-gps-desktop",
+  "version": "1.0.0",
+  "description": "NOVA GPS — Cross-platform desktop tracking workbench",
+  "author": "Novara System Software LTD",
+  "license": "MIT",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "NOVA_DEV=1 electron .",
+    "build:linux": "bash build.sh linux",
+    "build:mac": "bash build.sh mac",
+    "build:win": "bash build.sh win",
+    "build:all": "bash build.sh all",
+    "build:backend": "python3 build_backend.py"
+  },
+  "dependencies": {
+    "electron-store": "^8.1.0"
+  },
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1"
+  },
+  "build": {
+    "appId": "com.novara.novagps",
+    "productName": "NOVA GPS",
+    "copyright": "Copyright © 2026 Novara System Software LTD",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "!src/**/*.test.*",
+      "backend-bin/**/*",
+      "icon.*"
+    ],
+    "extraResources": [
+      {
+        "from": "backend-bin/",
+        "to": "backend"
+      }
+    ],
+    "linux": {
+      "target": [
+        { "target": "AppImage", "arch": ["x64"] },
+        { "target": "deb", "arch": ["x64"] },
+        { "target": "rpm", "arch": ["x64"] },
+        { "target": "tar.gz", "arch": ["x64"] }
+      ],
+      "category": "Utility",
+      "icon": "icon.png"
+    },
+    "mac": {
+      "target": [
+        { "target": "dmg", "arch": ["x64", "arm64"] },
+        { "target": "zip", "arch": ["x64", "arm64"] }
+      ],
+      "icon": "icon.icns",
+      "category": "public.app-category.utilities"
+    },
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] },
+        { "target": "zip", "arch": ["x64"] }
+      ],
+      "icon": "icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "icon.ico",
+      "uninstallerIcon": "icon.ico",
+      "installerHeaderIcon": "icon.ico",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "NOVA GPS"
+    }
+  }
+}

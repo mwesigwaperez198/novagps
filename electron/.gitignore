@@ -1,0 +1,12 @@
+# Electron build artifacts
+dist/
+release/
+build/
+backend-bin/
+src/
+node_modules/
+*.tgz
+
+# OS files
+.DS_Store
+Thumbs.db

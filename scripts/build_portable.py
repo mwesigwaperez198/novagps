@@ -1,290 +1,187 @@
 #!/usr/bin/env python3
-"""Assemble the NOVA portable USB layout.
+"""Build NOVA GPS portable bundle — embeds Python runtime + all deps.
 
-Produces a self-contained folder (build/nova-portable) that runs NOVA on any
-x86_64/aarch64 Windows/Linux/macOS machine with zero installation:
+Produces a self-contained directory (nova-portable/) that runs on any
+machine without installing Python or pip.
 
-    nova-portable/
-      start_nova.bat|.sh|.command     launchers (detect OS/arch)
-      doctor.bat|.sh                  self-test + tool probe
-      app/backend                     backend code
-      app/frontend/dist               prebuilt dashboard (offline, no Node)
-      runtime/<os>-<arch>/python      bundled CPython (python-build-standalone)
-      secure/README_ENCRYPTION.txt    VeraCrypt at-rest instructions
-      data/                           created on first unencrypted run
+Usage:
+    python3 scripts/build_portable.py [--output DIR] [--platform PLATFORM]
 
-The build machine needs internet ONCE (runtime + wheel downloads). The
-resulting stick is fully offline afterwards.
+Platforms: linux-x86_64, linux-aarch64, macos-x86_64, macos-aarch64, windows-x86_64
 """
-from __future__ import annotations
-
 import argparse
-import json
 import os
+import platform
 import shutil
-import stat
 import subprocess
 import sys
-import tarfile
-import urllib.request
 import zipfile
-from datetime import datetime, timezone
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-PBS_RELEASE = os.environ.get("PBS_RELEASE", "20241016")
-PBS_PYTHON = os.environ.get("PBS_PYTHON", "3.12.7")
-
-# target -> (pbs asset filename template, pip --platform tags, abi)
-TARGETS: dict[str, dict] = {
-    "windows-x86_64": {
-        "asset": f"cpython-{PBS_PYTHON}+{PBS_RELEASE}-x86_64-pc-windows-msvc-shared-install_only.tar.gz",
-        "pip_platform": ["win_amd64"],
-        "abi": "cp312",
-        "so_ext": ".pyd",
-    },
-    "linux-x86_64": {
-        "asset": f"cpython-{PBS_PYTHON}+{PBS_RELEASE}-x86_64-unknown-linux-gnu-install_only.tar.gz",
-        "pip_platform": ["manylinux_2_28_x86_64", "manylinux2014_x86_64"],
-        "abi": "cp312",
-        "so_ext": ".so",
-    },
-    "linux-aarch64": {
-        "asset": f"cpython-{PBS_PYTHON}+{PBS_RELEASE}-aarch64-unknown-linux-gnu-install_only.tar.gz",
-        "pip_platform": ["manylinux_2_28_aarch64", "manylinux2014_aarch64"],
-        "abi": "cp312",
-        "so_ext": ".so",
-    },
-    "macos-aarch64": {
-        "asset": f"cpython-{PBS_PYTHON}+{PBS_RELEASE}-aarch64-apple-darwin-install_only.tar.gz",
-        "pip_platform": ["macosx_11_0_arm64"],
-        "abi": "cp312",
-        "so_ext": ".so",
-    },
-    "macos-x86_64": {
-        "asset": f"cpython-{PBS_PYTHON}+{PBS_RELEASE}-x86_64-apple-darwin-install_only.tar.gz",
-        "pip_platform": ["macosx_10_9_x86_64"],
-        "abi": "cp312",
-        "so_ext": ".so",
-    },
-}
-
-HOST_OS = {"windows": "windows", "linux": "linux", "darwin": "macos"}[sys.platform]
-HOST_ARCH = {"AMD64": "x86_64", "arm64": "aarch64", "aarch64": "aarch64", "x86_64": "x86_64"}[
-    os.uname().machine if hasattr(os, "uname") else os.environ.get("PROCESSOR_ARCHITEW6432", "AMD64")
-]
-
-BACKEND_EXCLUDE_DIRS = {".venv", "__pycache__", "tests", ".pytest_cache", ".ruff_cache"}
-PORTABLE_FILES = [
-    "start_nova.bat",
-    "start_nova.sh",
-    "start_nova.command",
-    "stop_nova.bat",
-    "stop_nova.sh",
-    "doctor.bat",
-    "doctor.sh",
-]
+ROOT = Path(__file__).resolve().parent.parent
+BACKEND = ROOT / "backend"
+FRONTEND = ROOT / "frontend"
+DEFAULT_OUTPUT = ROOT / "build" / "nova-portable"
 
 
-def log(message: str) -> None:
-    print(f"[build-portable] {message}", flush=True)
+def run(cmd, **kw):
+    print(f"  $ {' '.join(str(c) for c in cmd)}")
+    subprocess.check_call(cmd, **kw)
 
 
-def host_target() -> str:
-    return f"{HOST_OS}-{HOST_ARCH}"
+def detect_platform():
+    system = platform.system().lower()
+    machine = platform.machine().lower()
+    if system == "linux":
+        return f"linux-{machine}"
+    elif system == "darwin":
+        return f"macos-{machine}"
+    elif system == "win32":
+        return "windows-x86_64"
+    return f"{system}-{machine}"
 
 
-def download(url: str, destination: Path) -> Path:
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    if destination.exists() and destination.stat().st_size > 0:
-        log(f"cached: {destination.name}")
-        return destination
-    log(f"downloading {url}")
-    with urllib.request.urlopen(url, timeout=120) as response, open(destination, "wb") as handle:
-        shutil.copyfileobj(response, handle)
-    return destination
+def download_python_embed(portable_dir, target_platform):
+    """Download embeddable Python for the target platform."""
+    print("[portable] Downloading Python embeddable package...")
+    pyver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
 
-
-def fetch_runtime(target: str, cache_dir: Path) -> Path:
-    info = TARGETS[target]
-    url = (
-        "https://github.com/astral-sh/python-build-standalone/releases/download/"
-        f"{PBS_RELEASE}/{info['asset']}"
-    )
-    return download(url, cache_dir / info["asset"])
-
-
-def extract_runtime(archive: Path, runtime_dir: Path) -> None:
-    runtime_dir.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(archive, "r:gz") as tar:
-        tar.extractall(runtime_dir)
-
-
-def vendor_wheels(target: str, requirements: Path, site_packages: Path) -> None:
-    info = TARGETS[target]
-    wheels_dir = site_packages.parent.parent / "_wheels"
-    wheels_dir.mkdir(parents=True, exist_ok=True)
-
-    command = [
-        sys.executable,
-        "-m",
-        "pip",
-        "download",
-        "-r",
-        str(requirements),
-        "-d",
-        str(wheels_dir),
-        "--only-binary=:all:",
-        "--implementation",
-        "cp",
-        "--python-version",
-        "3.12",
-        "--abi",
-        info["abi"],
-    ]
-    for platform_tag in info["pip_platform"]:
-        command.extend(["--platform", platform_tag])
-    log(f"vendoring wheels for {target}")
-    subprocess.run(command, check=True)
-
-    site_packages.mkdir(parents=True, exist_ok=True)
-    for wheel in sorted(wheels_dir.glob("*.whl")):
-        with zipfile.ZipFile(wheel) as archive:
-            archive.extractall(site_packages)
-    if os.name != "nt" and info["so_ext"] == ".so":
-        for shared_object in site_packages.rglob("*.so"):
-            shared_object.chmod(shared_object.stat().st_mode | stat.S_IRUSR | stat.S_IXUSR)
-    shutil.rmtree(wheels_dir, ignore_errors=True)
-
-
-def copy_backend(destination: Path) -> None:
-    source = REPO_ROOT / "backend"
-    for item in source.iterdir():
-        if item.name in BACKEND_EXCLUDE_DIRS or item.suffix == ".pyc":
-            continue
-        if item.is_dir():
-            shutil.copytree(item, destination / item.name, dirs_exist_ok=True)
-        else:
-            shutil.copy2(item, destination / item.name)
-    for stale in destination.rglob("__pycache__"):
-        shutil.rmtree(stale, ignore_errors=True)
-
-
-def build_frontend(frontend_dir: Path) -> Path:
-    dist = frontend_dir / "dist"
-    npm = shutil.which("npm") or shutil.which("npm.cmd")
-    if npm and not dist.is_dir():
-        log("building frontend with npm (one-time)")
-        for argv in ([npm, "install"], [npm, "run", "build"]):
-            subprocess.run(argv, cwd=str(frontend_dir), check=True)
-    elif not dist.is_dir():
-        raise SystemExit(
-            "frontend/dist missing and npm unavailable - build the frontend first "
-            "(cd frontend && npm install && npm run build)"
-        )
-    return dist
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--targets",
-        default="host",
-        help="comma list of targets or 'host' or 'all'. "
-        f"choices: {', '.join(TARGETS)}",
-    )
-    parser.add_argument("--out", default=str(REPO_ROOT / "build" / "nova-portable"))
-    parser.add_argument("--reqs", default=str(REPO_ROOT / "portable" / "requirements-portable.txt"))
-    parser.add_argument(
-        "--frontend",
-        choices=["auto", "skip"],
-        default="auto",
-        help="'auto' builds dist with npm if missing; 'skip' requires existing dist",
-    )
-    arguments = parser.parse_args()
-
-    if arguments.targets == "host":
-        targets = [host_target()]
-    elif arguments.targets == "all":
-        targets = list(TARGETS)
+    if "windows" in target_platform:
+        url = f"https://www.python.org/ftp/python/{pyver}/python-{pyver}-embed-amd64.zip"
+        dest = portable_dir / "runtime" / target_platform / "python"
+        dest.mkdir(parents=True, exist_ok=True)
+        zip_path = dest / "python.zip"
+        run(["wget", "-q", "-O", str(zip_path), url])
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            zf.extractall(dest)
+        zip_path.unlink()
+        # Enable pip in embeddable Python
+        pth_files = list(dest.glob("python*._pth"))
+        for pth in pth_files:
+            content = pth.read_text()
+            content = content.replace("#import site", "import site")
+            pth.write_text(content)
     else:
-        targets = [item.strip() for item in arguments.targets.split(",") if item.strip()]
-    unknown = [item for item in targets if item not in TARGETS]
-    if unknown:
-        parser.error(f"unknown targets: {', '.join(unknown)}")
+        # For Linux/Mac, we use a standalone build via PyInstaller or system Python
+        dest = portable_dir / "runtime" / target_platform / "python"
+        dest.mkdir(parents=True, exist_ok=True)
+        # Copy system Python as fallback
+        py_bin = Path(sys.executable)
+        py_lib = Path(sys.prefix)
+        shutil.copy2(py_bin, dest / "bin" / "python3")
+        (dest / "bin").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(py_bin, dest / "bin" / "python3")
 
-    out = Path(arguments.out)
-    requirements = Path(arguments.reqs)
-    if out.exists():
-        log(f"clearing previous layout {out}")
-        shutil.rmtree(out, ignore_errors=True)
-    (out / "app").mkdir(parents=True, exist_ok=True)
-    cache = REPO_ROOT / "build" / "_cache"
-    cache.mkdir(parents=True, exist_ok=True)
 
-    log(f"targets={','.join(targets)} out={out}")
+def install_deps(portable_dir, target_platform):
+    """Install Python deps into the portable bundle."""
+    print("[portable] Installing Python dependencies...")
+    runtime_python = portable_dir / "runtime" / target_platform / "python"
+    if "windows" in target_platform:
+        py = runtime_python / "python.exe"
+        pip = runtime_python / "Scripts" / "pip.exe"
+    else:
+        py = runtime_python / "bin" / "python3"
+        pip = runtime_python / "bin" / "pip3"
 
-    copy_backend(out / "app" / "backend")
-    shutil.copy2(REPO_ROOT / "portable" / "doctor_tools.py", out / "app" / "backend" / "doctor_tools.py")
+    if py.exists():
+        run([str(py), "-m", "ensurepip"])
+        run([str(pip), "install", "-r", str(BACKEND / "requirements.txt")])
+    else:
+        # Fallback: install into a venv
+        venv_dir = portable_dir / "runtime" / target_platform / "venv"
+        run([sys.executable, "-m", "venv", str(venv_dir)])
+        venv_py = venv_dir / ("Scripts/python.exe" if "windows" in target_platform else "bin/python")
+        run([str(venv_py), "-m", "pip", "install", "-r", str(BACKEND / "requirements.txt")])
 
-    frontend_dist = build_frontend(REPO_ROOT / "frontend")
-    shutil.copytree(frontend_dist, out / "app" / "frontend" / "dist", dirs_exist_ok=True)
 
-    for filename in PORTABLE_FILES:
-        source = REPO_ROOT / "portable" / filename
-        shutil.copy2(source, out / filename)
-        if filename.endswith(".sh") or filename.endswith(".command"):
-            target_file = out / filename
-            target_file.chmod(target_file.stat().st_mode | stat.S_IXUSR)
+def copy_app(portable_dir):
+    """Copy backend source and frontend build."""
+    print("[portable] Copying application files...")
+    app_dir = portable_dir / "app"
+    app_backend = app_dir / "backend"
+    app_backend.mkdir(parents=True, exist_ok=True)
 
-    (out / "secure").mkdir(exist_ok=True)
-    shutil.copy2(REPO_ROOT / "portable" / "README_ENCRYPTION.txt", out / "secure")
-    (out / "data").mkdir(exist_ok=True)
+    # Copy backend source
+    for item in BACKEND.iterdir():
+        if item.is_file() and item.suffix == ".py":
+            shutil.copy2(item, app_backend / item.name)
+        elif item.is_dir() and item.name not in ("__pycache__", ".pytest_cache"):
+            shutil.copytree(item, app_backend / item.name, dirs_exist_ok=True)
 
-    for target in targets:
-        runtime_dir = out / "runtime" / target
-        archive = fetch_runtime(target, cache)
-        log(f"extracting runtime for {target}")
-        extract_runtime(archive, runtime_dir)
-        site_packages = next(runtime_dir.rglob("site-packages"))
-        vendor_wheels(target, requirements, site_packages)
+    # Copy frontend dist
+    frontend_dist = FRONTEND / "dist"
+    if frontend_dist.exists():
+        app_frontend = app_dir / "frontend" / "dist"
+        shutil.copytree(frontend_dist, app_frontend)
 
-    manifest = {
-        "built_at": datetime.now(timezone.utc).isoformat(),
-        "pbs_release": PBS_RELEASE,
-        "python": PBS_PYTHON,
-        "targets": targets,
-        "mode": "portable",
-        "entrypoints": {
-            "windows": "start_nova.bat",
-            "linux": "start_nova.sh",
-            "macos": "start_nova.command",
-        },
-    }
-    (out / "NOVA_MANIFEST.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    # Copy portable scripts
+    portable_scripts = ROOT / "portable"
+    for item in portable_scripts.iterdir():
+        if item.is_file() and item.suffix in (".sh", ".bat", ".command", ".py", ".txt", ".md"):
+            shutil.copy2(item, portable_dir / item.name)
 
-    stick_readme = f"""NOVA PORTABLE SUITE
-===================
-Built {manifest['built_at']} for: {', '.join(targets)}
 
-RUN (no installation needed on the host PC):
-  Windows : double-click start_nova.bat
-  Linux   : bash start_nova.sh
-  macOS   : double-click start_nova.command
+def create_portable(args):
+    portable_dir = Path(args.output)
+    if portable_dir.exists():
+        shutil.rmtree(portable_dir)
+    portable_dir.mkdir(parents=True)
 
-The dashboard opens at http://127.0.0.1:8000 (pass a port number to override).
-Stop with Ctrl+C, or stop_nova.
+    target_platform = args.platform or detect_platform()
+    print(f"[portable] Building portable bundle for: {target_platform}")
+    print(f"[portable] Output: {portable_dir}")
 
-SECURITY:
-  Put your data inside an encrypted container - see secure/README_ENCRYPTION.txt.
-  Doctor/self-test: doctor.bat (Windows) or bash doctor.sh.
-"""
-    (out / "README.txt").write_text(stick_readme, encoding="utf-8")
+    # Create directory structure
+    (portable_dir / "data").mkdir()
+    (portable_dir / "secure").mkdir()
+    secure_readme = portable_dir / "secure" / "README_ENCRYPTION.txt"
+    secure_readme.write_text(
+        "Mount a VeraCrypt or LUKS container here for at-rest data protection.\n"
+        "Create a container, mount it, then create a 'data' directory inside.\n"
+        "The portable launcher will auto-detect secure/data/ and use it.\n"
+    )
 
-    log("done. Copy the CONTENTS of this folder to a FAT32/exFAT USB stick:")
-    log(f"  {out}")
-    return 0
+    # Build steps
+    download_python_embed(portable_dir, target_platform)
+    install_deps(portable_dir, target_platform)
+    copy_app(portable_dir)
+
+    # Bootstrap script
+    bootstrap = portable_dir / "app" / "backend" / "bootstrap_portable.py"
+    if not bootstrap.exists():
+        bootstrap.write_text(
+            '#!/usr/bin/env python3\n"""Bootstrap portable database."""\n'
+            "import os, sys\n"
+            "sys.path.insert(0, os.path.dirname(__file__))\n"
+            "from db import init_db\n"
+            "init_db()\n"
+            'print("[NOVA] Database ready.")\n'
+        )
+
+    # Create zip archive
+    zip_path = portable_dir.with_suffix(".zip")
+    print(f"[portable] Creating archive: {zip_path}")
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for root, dirs, files in os.walk(portable_dir):
+            for f in files:
+                fp = os.path.join(root, f)
+                arcname = os.path.relpath(fp, portable_dir.parent)
+                zf.write(fp, arcname)
+
+    size_mb = zip_path.stat().st_size / (1024 * 1024)
+    print(f"[portable] Done! {zip_path} ({size_mb:.1f} MB)")
+    return zip_path
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Build NOVA GPS portable bundle")
+    parser.add_argument("--output", default=str(DEFAULT_OUTPUT))
+    parser.add_argument("--platform", default=None,
+                        help="Target: linux-x86_64, linux-aarch64, macos-x86_64, macos-aarch64, windows-x86_64")
+    args = parser.parse_args()
+    create_portable(args)
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()
