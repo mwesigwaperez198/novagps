@@ -150,6 +150,29 @@ Where a phone shop or IT admin flashes a device on behalf of an owner, the
 enrollment profile is installed with the owner present and approving —
 exactly how a carrier or school provisions company devices today.
 
+## 4b. The encrypted-file layer — `.nova` payloads
+
+Everything above can also be delivered as **one encrypted file** instead of
+an installable package. `agent/tools/nova_pack.py` wraps any agent build in
+a `.nova` envelope:
+
+- **signed by Novara** (Ed25519) — a `.nova` from anyone else is inert;
+- **encrypted to one device** (ECIES over X25519 + AES-256-GCM) — copy it
+  to a different phone and it cannot be opened;
+- **tamper-proof** (Authenticated Encryption + artifact SHA-256 in the
+  manifest).
+
+The byte layout and CLI live in `agent/PACKAGE_FORMAT.md`; `agent/tools/test_nova_pack.py` is the release gate.
+
+Flow: the agent generates a device keypair and uploads the public key at
+registration → the console calls `nova_pack pack --device-pub <dev.pub>`
+→ the `.nova` file is shared like any other attachment → only that device
+(and only with a valid Novara signature) can open and attach it.
+"Encrypted file under the Nova system" is therefore exactly what ships
+here; the honest caveat stays: the file's encryption proves origin and
+locks it to a device, but the OS still owns the privilege to *attach*
+(Device Owner / MDM / service — see the matrix in section 2).
+
 ## 5. Desktop agents
 
 - **macOS**: a LaunchDaemon agent. Same command/location contract, root
