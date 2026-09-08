@@ -36,7 +36,10 @@ fi
 printf '[NOVA] Node %s / Python %s.%s OK\n' "$(node -v 2>/dev/null)" "$PY_MAJOR" "$PY_MINOR"
 
 # ---- 1. Backend python env (create + deps) ----
-if [ ! -x "$VENV/bin/python" ]; then
+# Check uvicorn is importable, not just that the venv exists: an interrupted
+# install (e.g. the old cryptography source-build failure) leaves a venv with
+# no deps while its python binary is present.
+if ! "$VENV/bin/python" -c 'import uvicorn, fastapi' >/dev/null 2>&1; then
     printf '[NOVA] First run: creating Python env + installing backend deps...\n'
     # A stale/empty venv dir (e.g. from an interrupted run) makes "venv" fail
     # with "File exists". Remove it if present so we always start clean.

@@ -24,7 +24,10 @@ if ! docker info >/dev/null 2>&1; then
 fi
 
 # ---- 1. Backend python env (create + install deps on first run) ----
-if [ ! -x "$VENV/bin/python" ]; then
+# Check uvicorn is importable, not just that the venv exists: an interrupted
+# install (e.g. the old cryptography source-build failure) leaves a venv with
+# no deps while its python binary is present.
+if ! "$VENV/bin/python" -c 'import uvicorn, fastapi' >/dev/null 2>&1; then
     printf '[NOVA] First run: creating Python env + installing backend deps...\n'
     rm -rf "$VENV"
     python3 -m venv "$VENV" || { printf '[NOVA] ERROR: could not create venv\n'; exit 1; }
