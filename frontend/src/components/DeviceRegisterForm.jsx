@@ -8,7 +8,14 @@ const blank = {
   phone: "",
   identifier: "",
   serial: "",
+  imei: "",
+  model: "",
+  manufacturer: "",
+  os_type: "",
+  os_version: "",
   device_type: "phone",
+  ip_address: "",
+  mac_address: "",
   consent_source: "manual-admin",
   consent_scope: "live-location,history,alerts",
 };
@@ -44,8 +51,10 @@ export default function DeviceRegisterForm({ onRegistered, onError }) {
     setIsSubmitting(true);
     try {
       const payload = { ...form };
-      if (!payload.identifier) delete payload.identifier;
-      if (!payload.serial) delete payload.serial;
+      for (const key of ["identifier", "serial", "imei", "model", "manufacturer",
+        "os_type", "os_version", "ip_address", "mac_address"]) {
+        if (!payload[key]) delete payload[key];
+      }
       const device = await api.register(payload);
       setForm(blank);
       onRegistered(device);
@@ -101,6 +110,54 @@ export default function DeviceRegisterForm({ onRegistered, onError }) {
           <option value="laptop">laptop</option>
           <option value="other">other</option>
         </select>
+        <input
+          placeholder="Model (e.g. iPhone 13)"
+          value={form.model}
+          onChange={(event) => update("model", event.target.value)}
+          disabled={isSubmitting}
+        />
+        <input
+          placeholder="Manufacturer (e.g. Apple)"
+          value={form.manufacturer}
+          onChange={(event) => update("manufacturer", event.target.value)}
+          disabled={isSubmitting}
+        />
+        <input
+          placeholder="OS type (e.g. iOS)"
+          value={form.os_type}
+          onChange={(event) => update("os_type", event.target.value)}
+          disabled={isSubmitting}
+        />
+        <input
+          placeholder="OS version (e.g. 17.5.1)"
+          value={form.os_version}
+          onChange={(event) => update("os_version", event.target.value)}
+          disabled={isSubmitting}
+        />
+        <input
+          placeholder="IMEI"
+          value={form.imei}
+          onChange={(event) => update("imei", event.target.value)}
+          disabled={isSubmitting}
+        />
+        <input
+          placeholder="Serial"
+          value={form.serial}
+          onChange={(event) => update("serial", event.target.value)}
+          disabled={isSubmitting}
+        />
+        <input
+          placeholder="MAC address (e.g. A4:83:E7:12:34:56)"
+          value={form.mac_address}
+          onChange={(event) => update("mac_address", event.target.value)}
+          disabled={isSubmitting}
+        />
+        <input
+          placeholder="IP address"
+          value={form.ip_address}
+          onChange={(event) => update("ip_address", event.target.value)}
+          disabled={isSubmitting}
+        />
         <button className="command-button" type="submit" disabled={isSubmitting}>
           {isSubmitting ? "REGISTERING..." : "REGISTER"}
         </button>
