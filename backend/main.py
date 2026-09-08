@@ -13,7 +13,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, 
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from prometheus_fastapi_instrumentator import Instrumentator
-from sqlalchemy import delete, or_, text
+from sqlalchemy import delete, func, or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -1610,6 +1610,329 @@ def webhook_deliveries(
     result = webhooks.list_deliveries(db, endpoint_id, limit)
     db.close()
     return {"deliveries": result}
+
+
+@app.get("/analytics/dashboard")
+def analytics_dashboard(
+    days: int = Query(7, ge=1, le=90),
+    db: Session = Depends(get_db),
+    _: Principal = Depends(require_roles("viewer", "operator", "admin", "auditor")),
+) -> dict[str, Any]:
+    since = datetime.utcnow() - timedelta(days=days)
+
+    total_devices = db.query(func.count(Device.id)).scalar() or 0
+    active_devices = db.query(func.count(Device.id)).filter(Device.is_active.is_(True)).scalar() or 0
+    lost_mode = db.query(func.count(Device.id)).filter(Device.is_lost_mode.is_(True)).scalar() or 0
+
+    location_count = db.query(func.count(Location.id)).filter(Location.recorded_at >= since).scalar() or 0
+    recent_devices = (
+        db.query(func.count(func.distinct(Location.device_id)))
+        .filter(Location.recorded_at >= since)
+        .scalar()
+        or 0
+    )
+
+    open_alerts = db.query(func.count(Alert.id)).filter(Alert.acknowledged.is_(False)).scalar() or 0
+    critical_alerts = (
+        db.query(func.count(Alert.id)).filter(Alert.severity == "critical", Alert.acknowledged.is_(False)).scalar()
+        or 0
+    )
+
+    day_bucket = func.date(Location.recorded_at)
+    activity = (
+        db.query(day_bucket, func.count(Location.id))
+        .filter(Location.recorded_at >= since)
+        .group_by(day_bucket)
+        .order_by(day_bucket)
+        .all()
+    )
+
+    speed_rows = (
+        db.query(Location.speed).filter(Location.recorded_at >= since, Location.speed.isnot(None)).all()
+    )
+    speeds = [row[0] for row in speed_rows]
+    avg_speed = round(sum(speeds) / len(speeds), 2) if speeds else 0.0
+
+    user_actions = db.query(func.count(AuditLog.id)).filter(AuditLog.created_at >= since).scalar() or 0
+
+    return {
+        "summary": {
+            "total_devices": total_devices,
+            "active_devices": active_devices,
+            "lost_mode_devices": lost_mode,
+            "locations_24h": location_count,
+            "active_devices_24h": recent_devices,
+            "open_alerts": open_alerts,
+            "critical_alerts": critical_alerts,
+            "avg_speed_kph": avg_speed,
+            "audit_actions": user_actions,
+        },
+        "activity": [
+            {"date": str(day), "updates": count} for day, count in activity
+        ],
+        "period_days": days,
+    }
+
+
+@app.get("/analytics/device/{device_id}")
+def analytics_device(
+    device_id: str,
+    limit: int = Query(200, ge=10, le=1000),
+    db: Session = Depends(get_db),
+    _: Principal = Depends(require_roles("viewer", "operator", "admin", "auditor")),
+) -> dict[str, Any]:
+    device = db.get(Device, device_id)
+    if not device:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
+
+    locations = (
+        db.query(Location)
+        .filter(Location.device_id == device_id)
+        .order_by(Location.recorded_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+    def record(item: Location) -> dict[str, Any]:
+        return {
+            "latitude": item.latitude,
+            "longitude": item.longitude,
+            "altitude": item.altitude,
+            "speed": item.speed,
+            "heading": item.heading,
+            "source": item.source,
+            "place_name": item.place_name,
+            "recorded_at": item.recorded_at,
+        }
+
+    payload = [record(item) for item in locations]
+
+    speeds = [item.speed for item in locations if item.speed is not None]
+    max_speed = max(speeds) if speeds else 0.0
+    avg_speed = round(sum(speeds) / len(speeds), 2) if speeds else 0.0
+
+    return {
+        "device": device_response(db, device),
+        "metrics": {
+            "samples": len(locations),
+            "max_speed_kph": max_speed,
+            "avg_speed_kph": avg_speed,
+            "active": device.is_active,
+            "lost_mode": device.is_lost_mode,
+            "os": device.os_type,
+            "os_version": device.os_version,
+            "imei": device.imei,
+        },
+        "trail": payload,
+    }
+
+
+@app.get("/analytics/device/{device_id}/fraud")
+def analytics_fraud(
+    device_id: str,
+    window: int = Query(6, ge=1, le=72),
+    db: Session = Depends(get_db),
+    _: Principal = Depends(require_roles("admin", "auditor")),
+) -> dict[str, Any]:
+    device = db.get(Device, device_id)
+    if not device:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
+
+    since = datetime.utcnow() - timedelta(hours=window)
+    rows = (
+        db.query(Location)
+        .filter(Location.device_id == device_id, Location.recorded_at >= since)
+        .order_by(Location.recorded_at.asc())
+        .all()
+    )
+
+    anomalies = []
+    if len(rows) >= 3:
+        for i in range(1, len(rows)):
+            prev, curr = rows[i - 1], rows[i]
+            dt = (curr.recorded_at - prev.recorded_at).total_seconds()
+            if dt <= 0:
+                continue
+            import math
+
+            speed = (curr.speed or 0.0)
+            if speed <= 1:
+                speed = math.hypot(curr.latitude - prev.latitude, curr.longitude - prev.longitude) * 111000 / dt * 3.6
+            if speed > 220:
+                anomalies.append(
+                    {
+                        "time": curr.recorded_at,
+                        "speed_kph": round(speed, 2),
+                        "lat": curr.latitude,
+                        "lon": curr.longitude,
+                        "reason": "implausible_speed",
+                    }
+                )
+
+    return {
+        "device_id": device_id,
+        "window_hours": window,
+        "samples": len(rows),
+        "anomalies": anomalies,
+        "anomaly_count": len(anomalies),
+        "verdict": "suspicious" if anomalies else "clean",
+    }
+
+
+@app.get("/analytics/device/{device_id}/heartbeat")
+def analytics_heartbeat(
+    device_id: str,
+    hours: int = Query(24, ge=1, le=168),
+    db: Session = Depends(get_db),
+    _: Principal = Depends(require_roles("viewer", "operator", "admin", "auditor")),
+) -> dict[str, Any]:
+    device = db.get(Device, device_id)
+    if not device:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
+
+    since = datetime.utcnow() - timedelta(hours=hours)
+    updates = (
+        db.query(Location.recorded_at)
+        .filter(Location.device_id == device_id, Location.recorded_at >= since)
+        .order_by(Location.recorded_at.asc())
+        .all()
+    )
+
+    if not updates:
+        return {
+            "device_id": device_id,
+            "status": "no_heartbeat",
+            "last_update": None,
+            "updates": [],
+            "count": 0,
+            "cadence_seconds": None,
+        }
+
+    last = updates[-1][0]
+    timestamps = [row[0].isoformat() for row in updates]
+
+    gaps = []
+    for i in range(1, len(updates)):
+        gaps.append((updates[i][0] - updates[i - 1][0]).total_seconds())
+    cadence = round(sum(gaps) / len(gaps), 1) if gaps else None
+
+    age_hours = (datetime.utcnow() - last).total_seconds() / 3600
+    if age_hours > 24:
+        state = "offline"
+    elif age_hours > 2:
+        state = "delayed"
+    else:
+        state = "healthy"
+
+    return {
+        "device_id": device_id,
+        "status": state,
+        "last_update": last,
+        "updates": timestamps,
+        "count": len(updates),
+        "cadence_seconds": cadence,
+    }
+
+
+@app.get("/analytics/device/{device_id}/location-stats")
+def analytics_location_stats(
+    device_id: str,
+    limit: int = Query(500, ge=10, le=5000),
+    db: Session = Depends(get_db),
+    _: Principal = Depends(require_roles("viewer", "operator", "admin", "auditor")),
+) -> dict[str, Any]:
+    device = db.get(Device, device_id)
+    if not device:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
+
+    locations = (
+        db.query(Location)
+        .filter(Location.device_id == device_id)
+        .order_by(Location.recorded_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+    source_counts: dict[str, int] = {}
+    places: dict[str, int] = {}
+    distance_km = 0.0
+    peak_speed = 0.0
+
+    for i, item in enumerate(locations):
+        source_counts[item.source or "unknown"] = source_counts.get(item.source or "unknown", 0) + 1
+        if item.place_name:
+            places[item.place_name] = places.get(item.place_name, 0) + 1
+        if item.speed and item.speed > peak_speed:
+            peak_speed = item.speed
+        if i < len(locations) - 1:
+            nxt = locations[i + 1]
+            distance_km += haversine_km(item.latitude, item.longitude, nxt.latitude, nxt.longitude)
+
+    return {
+        "device_id": device_id,
+        "samples": len(locations),
+        "distance_tracked_km": round(distance_km, 3),
+        "peak_speed_kph": peak_speed,
+        "top_sources": sorted(source_counts.items(), key=lambda kv: kv[1], reverse=True),
+        "top_places": sorted(places.items(), key=lambda kv: kv[1], reverse=True)[:10],
+    }
+
+
+@app.get("/analytics/device/{device_id}/export")
+def analytics_export(
+    device_id: str,
+    limit: int = Query(500, ge=10, le=5000),
+    format: str = Query("csv", pattern="^(csv|json)$"),
+    db: Session = Depends(get_db),
+    _: Principal = Depends(require_roles("viewer", "operator", "admin", "auditor")),
+) -> Any:
+    device = db.get(Device, device_id)
+    if not device:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
+
+    locations = (
+        db.query(Location)
+        .filter(Location.device_id == device_id)
+        .order_by(Location.recorded_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+    payload = [
+        {
+            "latitude": item.latitude,
+            "longitude": item.longitude,
+            "altitude": item.altitude,
+            "speed": item.speed,
+            "heading": item.heading,
+            "source": item.source,
+            "recorded_at": item.recorded_at.isoformat() if item.recorded_at else None,
+        }
+        for item in locations
+    ]
+
+    if format == "json":
+        return {"device_id": device_id, "rows": payload}
+
+    import csv
+    import io
+
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=["latitude", "longitude", "altitude", "speed", "heading", "source", "recorded_at"])
+    writer.writeheader()
+    writer.writerows(payload)
+    return {"device_id": device_id, "format": "csv", "content": buffer.getvalue()}
+
+
+def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    import math
+
+    radius = 6371.0
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    return 2 * radius * math.asin(math.sqrt(a))
 
 
 _frontend_dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"

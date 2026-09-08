@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Radio, Wifi, Search, Loader2, Zap } from "lucide-react";
+import { Radio, Wifi, Search, Loader2, Zap, Ban, KeyRound } from "lucide-react";
 import { api } from "../lib/api.js";
 
 export default function WifiPanel() {
@@ -7,6 +7,10 @@ export default function WifiPanel() {
   const [scanResult, setScanResult] = useState(null);
   const [handshakeResult, setHandshakeResult] = useState(null);
   const [wpsResult, setWpsResult] = useState(null);
+  const [deauthResult, setDeauthResult] = useState(null);
+  const [crackResult, setCrackResult] = useState(null);
+  const [crackFile, setCrackFile] = useState("");
+  const [wordlist, setWordlist] = useState("/usr/share/wordlists/rockyou.txt");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState("scan");
@@ -19,8 +23,12 @@ export default function WifiPanel() {
   }
 
   async function doHandshake(bssid) {
-    setLoading(true); setError(null); setHandshakeResult(null);
-    try { setHandshakeResult(await api.wifiCaptureHandshake(iface, bssid)); }
+    setLoading(true); setError(null); setHandshakeResult(null); setCrackResult(null);
+    try {
+      const res = await api.wifiCaptureHandshake(iface, bssid);
+      setHandshakeResult(res);
+      if (res && res.capture_file) setCrackFile(res.capture_file);
+    }
     catch (e) { setError(e.message); }
     setLoading(false);
   }
@@ -32,13 +40,28 @@ export default function WifiPanel() {
     setLoading(false);
   }
 
+  async function doDeauth(bssid) {
+    setLoading(true); setError(null); setDeauthResult(null);
+    try { setDeauthResult(await api.wifiDeauth(iface, bssid)); }
+    catch (e) { setError(e.message); }
+    setLoading(false);
+  }
+
+  async function doCrack() {
+    if (!crackFile) { setError("Capture file required"); return; }
+    setLoading(true); setError(null); setCrackResult(null);
+    try { setCrackResult(await api.wifiCrackWpa(crackFile, wordlist)); }
+    catch (e) { setError(e.message); }
+    setLoading(false);
+  }
+
   return (
     <div className="panel-inner">
       <h3><Radio size={14} /> WiFi Security Tools</h3>
-      <p className="muted">Scan, capture handshakes, WPS attacks, deauth</p>
+      <p className="muted">Scan, capture handshakes, WPS attacks, deauth, crack</p>
 
       <div className="tab-row">
-        {["scan", "handshake", "wps"].map((t) => (
+        {["scan", "handshake", "wps", "crack"].map((t) => (
           <button key={t} className={`tab-btn ${activeTab === t ? "active" : ""}`} onClick={() => setActiveTab(t)}>
             {t.charAt(0).toUpperCase() + t.slice(1)}
           </button>
@@ -72,6 +95,9 @@ export default function WifiPanel() {
                     <Zap size={10} />
                   </button>
                 )}
+                <button className="btn-sm btn-danger" onClick={() => doDeauth(n.bssid)} title="Deauth attack">
+                  <Ban size={10} />
+                </button>
               </span>
             </div>
           ))}
@@ -87,6 +113,14 @@ export default function WifiPanel() {
         </div>
       )}
 
+      {deauthResult && (
+        <div className="result-box">
+          <div><strong>Deauth:</strong></div>
+          <div><strong>Status:</strong> {deauthResult.status || deauthResult.message}</div>
+          {deauthResult.error && <div className="error-box">{deauthResult.error}</div>}
+        </div>
+      )}
+
       {wpsResult && (
         <div className="result-box">
           <div><strong>WPS Attack:</strong></div>
@@ -94,6 +128,29 @@ export default function WifiPanel() {
           {wpsResult.pin && <div><strong>PIN:</strong> {wpsResult.pin}</div>}
           {wpsResult.psk && <div><strong>PSK:</strong> {wpsResult.psk}</div>}
           {wpsResult.error && <div className="error-box">{wpsResult.error}</div>}
+        </div>
+      )}
+
+      {activeTab === "crack" && (
+        <div className="result-box">
+          <div><strong>WPA Dictionary Crack</strong></div>
+          <div className="input-row" style={{ marginTop: 6 }}>
+            <input value={crackFile} onChange={(e) => setCrackFile(e.target.value)} placeholder="Capture .cap file" />
+          </div>
+          <div className="input-row" style={{ marginTop: 6 }}>
+            <input value={wordlist} onChange={(e) => setWordlist(e.target.value)} placeholder="Wordlist path" />
+          </div>
+          <button className="btn-primary" onClick={doCrack} disabled={loading} style={{ marginTop: 6, width: "100%" }}>
+            {loading ? <Loader2 size={12} className="spin" /> : <KeyRound size={12} />} Crack WPA
+          </button>
+          {crackResult && (
+            <div className="result-box" style={{ marginTop: 6 }}>
+              <strong>Result:</strong>
+              <div><span className={crackResult.password ? "status-ok" : "status-err"}>{crackResult.status || crackResult.message}</span></div>
+              {crackResult.password && <div><strong>KEY:</strong> <span className="status-ok">{crackResult.password}</span></div>}
+              {crackResult.error && <div className="error-box">{crackResult.error}</div>}
+            </div>
+          )}
         </div>
       )}
     </div>

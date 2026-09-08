@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Send, Lock, AlertTriangle, Phone, ExternalLink, Shield } from "lucide-react";
+import { Send, Lock, AlertTriangle, Phone, ExternalLink, Shield, LocateFixed, MessageSquare, Trash2, Clock } from "lucide-react";
 import { api } from "../lib/api.js";
 
 export default function RemotePanel({ device }) {
@@ -9,6 +9,13 @@ export default function RemotePanel({ device }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState("sms");
+
+  const [cmdMessage, setCmdMessage] = useState("");
+  const [cmdContact, setCmdContact] = useState("");
+  const [cmdResult, setCmdResult] = useState(null);
+  const [cmdHistory, setCmdHistory] = useState([]);
+  const [cmdPending, setCmdPending] = useState([]);
+  const [showHistory, setShowHistory] = useState(false);
 
   const templates = [
     { label: "Recovery", text: "This phone has been reported lost. Please contact the owner immediately at 0765866555. A reward is offered for its return." },
@@ -47,6 +54,41 @@ export default function RemotePanel({ device }) {
     }
   }
 
+  async function runCommand(call) {
+    if (!device?.id) return;
+    setLoading(true);
+    setError("");
+    setCmdResult(null);
+    try {
+      const result = await call();
+      setCmdResult({ ok: true, data: result });
+    } catch (err) {
+      setCmdResult({ ok: false, data: err.message });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadCommands() {
+    if (!device?.id) return;
+    setLoading(true);
+    setError("");
+    setCmdResult(null);
+    try {
+      const [history, pending] = await Promise.all([
+        api.deviceCommands(device.id, 20),
+        api.devicePendingCommands(device.id),
+      ]);
+      setCmdHistory(history.commands || history || []);
+      setCmdPending(pending.pending || pending || []);
+      setShowHistory(true);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   if (!device) {
     return (
       <section className="panel remote-panel">
@@ -73,6 +115,9 @@ export default function RemotePanel({ device }) {
         </button>
         <button className={`panel-tab ${activeTab === "lock" ? "is-active" : ""}`} onClick={() => setActiveTab("lock")}>
           LOCK
+        </button>
+        <button className={`panel-tab ${activeTab === "cmd" ? "is-active" : ""}`} onClick={() => setActiveTab("cmd")}>
+          CMD
         </button>
       </div>
 
@@ -215,6 +260,88 @@ export default function RemotePanel({ device }) {
                   ))}
                 </div>
               )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeTab === "cmd" && (
+        <div className="remote-section">
+          <div className="section-label">
+            <LocateFixed size={12} />
+            <span>Device Commands</span>
+          </div>
+
+          <div className="command-grid">
+            <button className="command-button" onClick={() => runCommand(() => api.deviceTriggerLocate(device.id))} disabled={loading}>
+              <LocateFixed size={12} /> TRIGGER LOCATE
+            </button>
+            <button className="command-button" onClick={() => runCommand(() => api.remoteLostMode(device.id, cmdMessage || "This device is lost. Please call the owner.", cmdContact))} disabled={loading}>
+              LOST MODE
+            </button>
+          </div>
+
+          <div className="section-label" style={{ marginTop: 8 }}>
+            <Lock size={12} />
+            <span>Lock Message</span>
+          </div>
+          <textarea
+            className="sms-input"
+            value={cmdMessage}
+            onChange={(e) => setCmdMessage(e.target.value)}
+            placeholder="Lock / lost-mode message shown on device"
+            rows={2}
+          />
+          <input
+            className="text-input"
+            value={cmdContact}
+            onChange={(e) => setCmdContact(e.target.value)}
+            placeholder="Contact number (optional)"
+          />
+
+          <div className="command-grid">
+            <button className="command-button lock-btn" onClick={() => runCommand(() => api.remoteLock(device.id, cmdMessage || "This device has been remotely locked.", cmdContact))} disabled={loading}>
+              <Lock size={12} /> REMOTE LOCK
+            </button>
+            <button className="command-button send-btn" onClick={() => runCommand(() => api.remoteSendMessage(device.id, cmdMessage))} disabled={loading || !cmdMessage.trim()}>
+              <MessageSquare size={12} /> PUSH MESSAGE
+            </button>
+            <button className="command-button warn-btn" onClick={() => runCommand(() => api.remoteWipe(device.id, "CONFIRM-WIPE"))} disabled={loading}>
+              <Trash2 size={12} /> REMOTE WIPE
+            </button>
+            <button className="command-button" onClick={loadCommands} disabled={loading}>
+              <Clock size={12} /> COMMAND LOG
+            </button>
+          </div>
+
+          {error && <div className="inline-error">{error}</div>}
+
+          {cmdResult && (
+            <div className={cmdResult.ok ? "result-success" : "result-pending"}>
+              {cmdResult.ok ? (
+                <span><span className="success-icon">&#10003;</span> Command accepted</span>
+              ) : (
+                <span><AlertTriangle size={14} /> {cmdResult.data}</span>
+              )}
+            </div>
+          )}
+
+          {showHistory && (
+            <div className="lock-guide">
+              <div className="guide-label">Pending Commands ({cmdPending.length})</div>
+              {cmdPending.length === 0 && <div className="guide-note">No pending commands</div>}
+              {cmdPending.map((cmd, i) => (
+                <div key={i} className="guide-req">
+                  {cmd.command || cmd.name || cmd.action} — {cmd.status || "queued"}
+                </div>
+              ))}
+              <div className="guide-label" style={{ marginTop: 8 }}>Recent Commands</div>
+              {cmdHistory.length === 0 && <div className="guide-note">No command history</div>}
+              {cmdHistory.map((cmd, i) => (
+                <div key={i} className="guide-req">
+                  {cmd.command || cmd.name || cmd.action || cmd.id} — {cmd.status || cmd.exit_code !== null ? `exit ${cmd.exit_code}` : "done"}
+                </div>
+              ))}
             </div>
           )}
         </div>

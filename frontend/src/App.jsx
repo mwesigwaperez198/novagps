@@ -2,8 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Monitor, Map, Menu, X, LogOut, Search } from "lucide-react";
 import AlertsLog from "./components/AlertsLog.jsx";
 import AlertsPanel from "./components/AlertsPanel.jsx";
+import AnalyticsPanel from "./components/AnalyticsPanel.jsx";
+import AuditLogPanel from "./components/AuditLogPanel.jsx";
 import BroadcastController from "./components/BroadcastController.jsx";
 import CameraPanel from "./components/CameraPanel.jsx";
+import ConsentPanel from "./components/ConsentPanel.jsx";
 import DeviceList from "./components/DeviceList.jsx";
 import DeviceRegisterForm from "./components/DeviceRegisterForm.jsx";
 import DiscoveryPanel from "./components/DiscoveryPanel.jsx";
@@ -55,6 +58,9 @@ const PANEL_TABS = [
   { id: "alerts", label: "ALRT" },
   { id: "scheduler", label: "TASK" },
   { id: "webhooks", label: "HOOK" },
+  { id: "consent", label: "CONS" },
+  { id: "analytics", label: "ANL" },
+  { id: "audit", label: "AUD" },
 ];
 
 export default function App() {
@@ -284,6 +290,9 @@ export default function App() {
                 {activePanel === "alerts" && <AlertsPanel />}
                 {activePanel === "scheduler" && <SchedulerPanel />}
                 {activePanel === "webhooks" && <WebhookPanel />}
+                {activePanel === "consent" && <ConsentPanel device={selectedDevice} />}
+                {activePanel === "analytics" && <AnalyticsPanel device={selectedDevice} />}
+                {activePanel === "audit" && <AuditLogPanel />}
               </div>
               <BroadcastController onEvent={(event) => setEvents((items) => [event, ...items])} />
               <DeviceRegisterForm

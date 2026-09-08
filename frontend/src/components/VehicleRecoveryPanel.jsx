@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Car, AlertTriangle, Camera, Loader2, MapPin } from "lucide-react";
+import { Car, AlertTriangle, Camera, Loader2, MapPin, Link2 } from "lucide-react";
 import { api } from "../lib/api.js";
 
 export default function VehicleRecoveryPanel({ device }) {
@@ -7,6 +7,9 @@ export default function VehicleRecoveryPanel({ device }) {
   const [activeRecoveries, setActiveRecoveries] = useState(null);
   const [recoveryStatus, setRecoveryStatus] = useState(null);
   const [stolenResult, setStolenResult] = useState(null);
+  const [linkCam, setLinkCam] = useState("");
+  const [linkPort, setLinkPort] = useState(554);
+  const [linkResult, setLinkResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -32,7 +35,7 @@ export default function VehicleRecoveryPanel({ device }) {
   async function endRecovery() {
     if (!recoveryId) return;
     setLoading(true); setError(null);
-    try { await api.vehicleEndRecovery(recoveryId); setRecoveryStatus(null); }
+    try { await api.vehicleEndRecovery(recoveryId); setRecoveryStatus(null); setLinkResult(null); }
     catch (e) { setError(e.message); }
     setLoading(false);
   }
@@ -41,6 +44,16 @@ export default function VehicleRecoveryPanel({ device }) {
     setLoading(true); setError(null);
     try { setActiveRecoveries(await api.vehicleActiveRecoveries()); }
     catch (e) { setError(e.message); }
+    setLoading(false);
+  }
+
+  async function linkCamera() {
+    if (!recoveryId || !device?.id || !linkCam) { setError("Recovery ID, device and camera IP required"); return; }
+    setLoading(true); setError(null); setLinkResult(null);
+    try {
+      const res = await api.vehicleLinkCamera(recoveryId, device.id, linkCam, linkPort);
+      setLinkResult(res);
+    } catch (e) { setError(e.message); }
     setLoading(false);
   }
 
@@ -98,6 +111,22 @@ export default function VehicleRecoveryPanel({ device }) {
               <strong>{r.recovery_id.substring(0, 8)}...</strong> - {r.status} ({r.device_id})
             </div>
           ))}
+        </div>
+      )}
+
+      <div className="section-label">Link Camera to Recovery</div>
+      <div className="input-row">
+        <input value={linkCam} onChange={(e) => setLinkCam(e.target.value)} placeholder="Camera IP" />
+        <input type="number" value={linkPort} min={1} max={65535} onChange={(e) => setLinkPort(Number(e.target.value))} style={{ width: 64 }} placeholder="Port" />
+      </div>
+      <button onClick={linkCamera} disabled={loading} className="btn-primary" style={{ width: "100%", marginTop: 6 }}>
+        {loading ? <Loader2 size={12} className="spin" /> : <Link2 size={12} />} Link Camera
+      </button>
+
+      {linkResult && (
+        <div className="result-box">
+          <div><strong>Status:</strong> {linkResult.status || linkResult.message}</div>
+          {linkResult.camera_id && <div><strong>Camera ID:</strong> {linkResult.camera_id}</div>}
         </div>
       )}
 

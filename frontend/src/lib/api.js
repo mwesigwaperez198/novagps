@@ -48,6 +48,8 @@ export const api = {
   register: (payload) => request("/register", { method: "POST", body: JSON.stringify(payload) }),
   consent: (payload) => request("/consent", { method: "POST", body: JSON.stringify(payload) }),
   consentRevoke: (payload) => request("/consent/revoke", { method: "POST", body: JSON.stringify(payload) }),
+  consentHistory: (deviceId, limit = 50) => request(`/consent/history?device_id=${encodeURIComponent(deviceId)}&limit=${limit}`),
+  consentVerifyChain: (limit = 1000) => request(`/consent/verify-chain?limit=${limit}`),
   diagnose: (payload) => request("/diagnose", { method: "POST", body: JSON.stringify(payload) }),
   tools: () => request("/diagnose/tools"),
   broadcast: (payload) => request("/broadcast", { method: "POST", body: JSON.stringify(payload) }),

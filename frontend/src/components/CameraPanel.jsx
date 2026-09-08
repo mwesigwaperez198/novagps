@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Camera, Wifi } from "lucide-react";
+import { Camera, Wifi, Video } from "lucide-react";
 import { api } from "../lib/api.js";
 
 export default function CameraPanel() {
@@ -8,6 +8,9 @@ export default function CameraPanel() {
   const [scanning, setScanning] = useState(false);
   const [screenshotUrl, setScreenshotUrl] = useState("");
   const [screenshotResult, setScreenshotResult] = useState(null);
+  const [recordUrl, setRecordUrl] = useState("");
+  const [duration, setDuration] = useState(30);
+  const [recordResult, setRecordResult] = useState(null);
 
   async function discover() {
     setScanning(true);
@@ -28,6 +31,17 @@ export default function CameraPanel() {
       setScreenshotResult(result);
     } catch (err) {
       setScreenshotResult({ error: err.message });
+    }
+  }
+
+  async function startRecord() {
+    if (!recordUrl.trim()) return;
+    try {
+      setRecordResult(null);
+      const result = await api.cameraRecord(recordUrl, duration);
+      setRecordResult(result);
+    } catch (err) {
+      setRecordResult({ error: err.message });
     }
   }
 
@@ -73,6 +87,32 @@ export default function CameraPanel() {
       {screenshotResult && (
         <div className="scan-result">
           <pre>{JSON.stringify(screenshotResult, null, 2)}</pre>
+        </div>
+      )}
+      <div className="tool-controls">
+        <div className="target-row">
+          <input
+            value={recordUrl}
+            onChange={(e) => setRecordUrl(e.target.value)}
+            placeholder="rtsp://ip:554/live (record)"
+          />
+          <input
+            type="number"
+            value={duration}
+            min={5}
+            max={300}
+            onChange={(e) => setDuration(Number(e.target.value))}
+            style={{ width: 54 }}
+            placeholder="sec"
+          />
+          <button className="command-button" onClick={startRecord} title="Record video">
+            <Video size={13} /> REC
+          </button>
+        </div>
+      </div>
+      {recordResult && (
+        <div className="scan-result">
+          <pre>{JSON.stringify(recordResult, null, 2)}</pre>
         </div>
       )}
     </section>
