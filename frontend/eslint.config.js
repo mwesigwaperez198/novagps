@@ -1,3 +1,5 @@
+import globals from "globals";
+
 export default [
   {
     ignores: ["dist/**", "node_modules/**"],
@@ -13,13 +15,9 @@ export default [
         },
       },
       globals: {
-        cancelAnimationFrame: "readonly",
-        document: "readonly",
-        fetch: "readonly",
-        import: "readonly",
-        requestAnimationFrame: "readonly",
-        WebSocket: "readonly",
-        window: "readonly",
+        ...globals.browser,
+        global: "readonly",
+        globalThis: "readonly",
       },
     },
     rules: {

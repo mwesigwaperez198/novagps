@@ -3,7 +3,7 @@ import { Activity } from "lucide-react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { api } from "../lib/api.js";
-import { getViewerLocation, relativeTime, simulateMotion, speedColor } from "../lib/live.js";
+import { KAMPALA, getViewerLocation, relativeTime, simulateMotion, speedColor } from "../lib/live.js";
 
 function asNumber(value) {
   const next = Number(value);
