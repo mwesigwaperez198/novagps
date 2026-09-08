@@ -1,0 +1,17 @@
+# Android SDK / Gradle local state
+local.properties
+.gradle/
+build/
+app/build/
+captures/
+*.iml
+.idea/
+.kotlin/
+
+# Signing keystores never enter version control
+*.jks
+*.keystore
+keystore.properties
+
+# Runtime state written by the agent
+*.apk

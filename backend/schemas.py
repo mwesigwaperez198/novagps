@@ -37,6 +37,29 @@ class ConsentRevokeRequest(BaseModel):
     reason: str | None = Field(None, max_length=500)
 
 
+class AgentPullCommandsRequest(BaseModel):
+    device_id: str | None = None
+    identifier: str | None = None
+
+    @model_validator(mode="after")
+    def device_or_identifier_required(self):
+        if not self.identifier and not self.device_id:
+            raise ValueError("device_id or identifier is required")
+        return self
+
+
+class AgentAckCommandRequest(BaseModel):
+    device_id: str | None = None
+    identifier: str | None = None
+    command_id: str = Field(..., min_length=1)
+
+    @model_validator(mode="after")
+    def device_or_identifier_required(self):
+        if not self.identifier and not self.device_id:
+            raise ValueError("device_id or identifier is required")
+        return self
+
+
 class LocationUpdateRequest(BaseModel):
     device_id: str | None = None
     identifier: str | None = None

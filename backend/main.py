@@ -37,6 +37,8 @@ from models import (
     utcnow,
 )
 from schemas import (
+    AgentAckCommandRequest,
+    AgentPullCommandsRequest,
     BroadcastRequest,
     ConsentRequest,
     ConsentRevokeRequest,
@@ -1211,6 +1213,31 @@ def device_pending_commands(
     result = push_service.get_pending_commands(db, device_id)
     db.close()
     return {"pending": result}
+
+
+@app.post("/device/pull-commands")
+def device_pull_commands(
+    payload: AgentPullCommandsRequest,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict:
+    device = resolve_device(db, payload)
+    require_active_consent(db, device)
+    commands = push_service.get_pending_commands(db, device.id)
+    return {"commands": commands}
+
+
+@app.post("/device/ack-command")
+def device_ack_command(
+    payload: AgentAckCommandRequest,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+) -> dict:
+    device = resolve_device(db, payload)
+    require_active_consent(db, device)
+    push_service.acknowledge_command(db, payload.command_id)
+    create_audit(db, principal, "agent.ack_command", {"device_id": device.id, "command_id": payload.command_id})
+    return {"status": "acknowledged"}
 
 
 @app.post("/device/{device_id}/trigger-locate")

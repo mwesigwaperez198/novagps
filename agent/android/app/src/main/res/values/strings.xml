@@ -1,0 +1,11 @@
+<resources>
+    <string name="app_name">NOVA Agent</string>
+    <string name="admin_description">Protects this device and keeps the NOVA security system in contact: lock, wipe, and locate during theft.</string>
+    <string name="notification_channel_name">NOVA location reporting</string>
+    <string name="notification_channel_desc">Keeps the device traceable while the NOVA agent runs.</string>
+    <string name="changelog">Install complete. The device is now reporting to the NOVA server.</string>
+    <string name="config_server_url">Server URL</string>
+    <string name="config_identifier">Device identifier</string>
+    <string name="save_config">Save</string>
+    <string name="open_firewall">Open firewall</string>
+</resources>

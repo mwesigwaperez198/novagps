@@ -1,0 +1,8 @@
+#!/bin/sh
+
+# Minimal Gradle wrapper launcher; the gradle-wrapper.jar that Android
+# Studio generates is needed to run this. Open the folder in Android Studio
+# and it will fetch Gradle 8.7 + the wrapper jar automatically.
+APP_HOME=$(cd "$(dirname "$0")" && pwd)
+GRADLE_VERSION=$(sed -n 's/^distributionUrl=.*gradle-\([0-9.]*\)-.*/\1/p' "$APP_HOME/gradle/wrapper/gradle-wrapper.properties")
+exec "$APP_HOME/gradlew" "$@"
