@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Activity, Cpu, Radio, ShieldCheck, ShieldAlert, Smartphone } from "lucide-react";
 import { api } from "../lib/api.js";
-import { clockTime, isLive, relativeTime, simulateMotion } from "../lib/live.js";
+import { clockTime, getViewerLocation, isLive, relativeTime, simulateMotion } from "../lib/live.js";
 
 function heartbeatLabel(heartbeat) {
   if (!heartbeat || typeof heartbeat !== "object") return "--";
@@ -101,12 +101,13 @@ export default function DeviceInsight({ device, onSimulated }) {
     setSimulating(true);
     setSimError("");
     try {
-      await simulateMotion(device, api);
+      const viewer = await getViewerLocation();
+      await simulateMotion(device, api, viewer);
       const items = await api.locations(device.id, 1);
       if (items.length) setLast(items[0]);
       onSimulated?.();
     } catch (err) {
-      setSimError(err.message || "Simulation failed (grant consent first)");
+      setSimError(err.message || "Simulation failed (grant consent / location access)");
     } finally {
       setSimulating(false);
     }

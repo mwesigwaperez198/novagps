@@ -27,17 +27,28 @@ export function isLive(location) {
   return Number.isFinite(then) && Date.now() - then < 60_000;
 }
 
+// Try to get the viewer's actual position (used to anchor a simulated trip
+// when a device has no real fix yet), so demo coordinates match the user.
+export function getViewerLocation() {
+  if (typeof navigator === "undefined" || !navigator.geolocation) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    navigator.geolocation.getCurrentPosition(
+      (position) => resolve({ latitude: position.coords.latitude, longitude: position.coords.longitude }),
+      () => resolve(null),
+      { enableHighAccuracy: true, timeout: 8000 },
+    );
+  });
+}
+
 // Streams a short synthetic trip for a device with no real signal so the
 // map, telemetry and analytics go live during demos. Uses the real
 // /update-location endpoint (active consent required on the device).
-export async function simulateMotion(device, api) {
+export async function simulateMotion(device, api, anchorOverride = null) {
   if (!device?.identifier) throw new Error("Device has no identifier");
-  const anchor = device.latest_location
-    ? {
-        latitude: Number(device.latest_location.latitude),
-        longitude: Number(device.latest_location.longitude),
-      }
-    : KAMPALA;
+  const reported = device.latest_location
+    ? { latitude: Number(device.latest_location.latitude), longitude: Number(device.latest_location.longitude) }
+    : null;
+  const anchor = reported || anchorOverride || KAMPALA;
   const speeds = [12, 24, 38, 52, 61, 47, 33, 19];
   let currentLat = anchor.latitude;
   let currentLon = anchor.longitude;

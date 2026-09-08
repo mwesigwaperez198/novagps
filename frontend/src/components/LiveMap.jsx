@@ -3,7 +3,7 @@ import { Activity } from "lucide-react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { api } from "../lib/api.js";
-import { KAMPALA, relativeTime, simulateMotion, speedColor } from "../lib/live.js";
+import { getViewerLocation, relativeTime, simulateMotion, speedColor } from "../lib/live.js";
 
 function asNumber(value) {
   const next = Number(value);
@@ -219,7 +219,8 @@ export default function LiveMap({ device }) {
     setSimulating(true);
     setSimError("");
     try {
-      await simulateMotion(device, api);
+      const viewer = await getViewerLocation();
+      await simulateMotion(device, api, viewer);
       const items = await api.locations(device.id, 160);
       setRouteHistory(items);
       dataLayerRef.current.options.resetAnchorDeviceId = undefined;
@@ -228,7 +229,7 @@ export default function LiveMap({ device }) {
         mapRef.current.fitBounds([[latestItem.latitude, latestItem.longitude]], { maxZoom: 16 });
       }
     } catch (err) {
-      setSimError(err.message || "Simulation failed (grant consent first)");
+      setSimError(err.message || "Simulation failed (grant consent / location access)");
     } finally {
       setSimulating(false);
     }
