@@ -122,11 +122,15 @@ def reverse_geocode(latitude: float, longitude: float) -> str | None:
     return None
 
 
+def client_ip(request: Request) -> str:
+    return request.headers.get("x-forwarded-for", request.client.host if request.client else "unknown").split(",")[0]
+
+
 @app.middleware("http")
 async def rate_limit(request: Request, call_next):
     if settings.environment == "development":
         return await call_next(request)
-    key = request.headers.get("x-forwarded-for", request.client.host if request.client else "unknown").split(",")[0]
+    key = client_ip(request)
     now = utcnow()
     window_start = now - timedelta(minutes=1)
     RATE_BUCKET[key] = [item for item in RATE_BUCKET.get(key, []) if item > window_start]
@@ -180,6 +184,7 @@ def latest_location_dict(db: Session, device_id: str) -> dict[str, Any] | None:
         "accuracy": location.accuracy,
         "place_name": location.place_name,
         "source": location.source,
+        "ip_address": location.ip_address,
         "recorded_at": location.recorded_at,
         "received_at": location.received_at,
     }
@@ -383,6 +388,7 @@ def verify_consent_chain(
 @app.post("/update-location", status_code=status.HTTP_202_ACCEPTED)
 def update_location(
     payload: LocationUpdateRequest,
+    request: Request,
     db: Session = Depends(get_db),
     principal: Principal = Depends(get_current_principal),
 ) -> dict[str, Any]:
@@ -390,6 +396,7 @@ def update_location(
     require_active_consent(db, device)
     recorded_at = payload.recorded_at or utcnow()
     place_name = payload.place_name or reverse_geocode(payload.latitude, payload.longitude)
+    ip_address = client_ip(request)
     location = Location(
         device_id=device.id,
         latitude=payload.latitude,
@@ -400,10 +407,12 @@ def update_location(
         accuracy=payload.accuracy,
         place_name=place_name,
         source=payload.source,
+        ip_address=ip_address,
         geom=f"POINT({payload.longitude} {payload.latitude})",
         recorded_at=recorded_at,
         raw_payload=payload.raw_payload,
     )
+    device.ip_address = ip_address
     db.add(location)
     create_audit(db, principal, "location.ingest", {"device_id": device.id, "source": payload.source})
     db.commit()
@@ -420,6 +429,7 @@ def update_location(
         "accuracy": location.accuracy,
         "place_name": place_name,
         "source": location.source,
+        "ip_address": ip_address,
         "recorded_at": location.recorded_at.isoformat(),
         "received_at": location.received_at.isoformat(),
     }
@@ -431,7 +441,7 @@ def update_location(
             "geofence matches=%s",
             check_event_against_geofences_local(device.id, payload.longitude, payload.latitude),
         )
-    return {"status": "accepted", "location_id": location.id, "place_name": place_name, "kafka_published": kafka_published}
+    return {"status": "accepted", "location_id": location.id, "place_name": place_name, "ip_address": ip_address, "kafka_published": kafka_published}
 
 
 @app.post("/device/locate", status_code=status.HTTP_202_ACCEPTED)
@@ -546,6 +556,8 @@ def get_device_locations(
             "heading": item.heading,
             "accuracy": item.accuracy,
             "source": item.source,
+            "place_name": item.place_name,
+            "ip_address": item.ip_address,
             "recorded_at": item.recorded_at,
             "received_at": item.received_at,
         }

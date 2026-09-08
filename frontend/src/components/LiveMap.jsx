@@ -3,7 +3,7 @@ import { Activity } from "lucide-react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { api } from "../lib/api.js";
-import { KAMPALA, getViewerLocation, relativeTime, simulateMotion, speedColor } from "../lib/live.js";
+import { KAMPALA, getViewerLocation, relativeTime, reportViewerLocation, speedColor } from "../lib/live.js";
 
 function asNumber(value) {
   const next = Number(value);
@@ -214,22 +214,22 @@ export default function LiveMap({ device }) {
     }
   }, [device?.id, device?.device_type, device?.latest_location, mapReady, routeHistory, geofences, liveLocation]);
 
-  async function simulate() {
+  async function reportLocation() {
     if (!device?.identifier) return;
     setSimulating(true);
     setSimError("");
     try {
       const viewer = await getViewerLocation();
-      await simulateMotion(device, api, viewer);
+      await reportViewerLocation(device, api, viewer);
       const items = await api.locations(device.id, 160);
       setRouteHistory(items);
       dataLayerRef.current.options.resetAnchorDeviceId = undefined;
       if (mapRef.current && items.length) {
         const latestItem = items[0];
-        mapRef.current.fitBounds([[latestItem.latitude, latestItem.longitude]], { maxZoom: 16 });
+        mapRef.current.setView([latestItem.latitude, latestItem.longitude], 17, { animate: true });
       }
     } catch (err) {
-      setSimError(err.message || "Simulation failed (grant consent / location access)");
+      setSimError(err.message || "Could not report location (grant consent / location access first)");
     } finally {
       setSimulating(false);
     }
@@ -245,11 +245,11 @@ export default function LiveMap({ device }) {
         </code>
         <button
           className={`command-button ${simulating ? "is-busy" : ""}`}
-          onClick={simulate}
+          onClick={reportLocation}
           disabled={simulating || !device?.identifier}
           type="button"
         >
-          <Activity size={14} /> {simulating ? "SIMULATING…" : "SIMULATE SIGNAL"}
+          <Activity size={14} /> {simulating ? "REPORTING…" : "REPORT MY LOCATION"}
         </button>
       </div>
       {simError && <div className="map-error">{simError}</div>}

@@ -27,46 +27,46 @@ export function isLive(location) {
   return Number.isFinite(then) && Date.now() - then < 60_000;
 }
 
-// Try to get the viewer's actual position (used to anchor a simulated trip
-// when a device has no real fix yet), so demo coordinates match the user.
+// Fetch the viewer's actual position (used when a device has no real fix yet).
+// Returns the precise GPS point with the browser's real accuracy estimate.
 export function getViewerLocation() {
   if (typeof navigator === "undefined" || !navigator.geolocation) return Promise.resolve(null);
   return new Promise((resolve) => {
     navigator.geolocation.getCurrentPosition(
-      (position) => resolve({ latitude: position.coords.latitude, longitude: position.coords.longitude }),
+      (position) =>
+        resolve({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracy: position.coords.accuracy,
+          altitude: position.coords.altitude,
+          speed: position.coords.speed,
+          heading: position.coords.heading,
+        }),
       () => resolve(null),
       { enableHighAccuracy: true, timeout: 8000 },
     );
   });
 }
 
-// Streams a short synthetic trip for a device with no real signal so the
-// map, telemetry and analytics go live during demos. Uses the real
-// /update-location endpoint (active consent required on the device).
-export async function simulateMotion(device, api, anchorOverride = null) {
+// Records ONE real, exact point for a device that has no live telemetry yet,
+// using the person's actual GPS position. No synthetic movement, no fake
+// speeds, no mock routes - just a single precise fix through the real ingest
+// pipeline (active consent required, same as a hardware tracker).
+export async function reportViewerLocation(device, api, anchor = null) {
   if (!device?.identifier) throw new Error("Device has no identifier");
-  const reported = device.latest_location
-    ? { latitude: Number(device.latest_location.latitude), longitude: Number(device.latest_location.longitude) }
-    : null;
-  const anchor = reported || anchorOverride || KAMPALA;
-  const speeds = [12, 24, 38, 52, 61, 47, 33, 19];
-  let currentLat = anchor.latitude;
-  let currentLon = anchor.longitude;
-  for (const [index, speed] of speeds.entries()) {
-    currentLat += 0.0009 + Math.sin(index * 1.7) * 0.0004;
-    currentLon += 0.0026 + Math.cos(index * 1.3) * 0.0005;
-    await api.updateLocation({
-      identifier: device.identifier,
-      latitude: Number(currentLat.toFixed(6)),
-      longitude: Number(currentLon.toFixed(6)),
-      altitude: 1180,
-      speed,
-      heading: 122,
-      accuracy: 6,
-      source: "mobile",
-      raw_payload: { simulated: true, seq: index + 1 },
-    });
+  const point = anchor || (await getViewerLocation());
+  if (!point?.latitude || !point?.longitude) {
+    throw new Error("No GPS fix available. Grant location access on this device first.");
   }
+  await api.updateLocation({
+    identifier: device.identifier,
+    latitude: Number(point.latitude.toFixed(7)),
+    longitude: Number(point.longitude.toFixed(7)),
+    accuracy: Number(point.accuracy ?? 8),
+    altitude: point.altitude,
+    source: "mobile",
+    raw_payload: { viewer_reported: true, precision_m: point.accuracy ?? null },
+  });
 }
 
 export function speedColor(speed) {

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { Activity, Cpu, Radio, ShieldCheck, ShieldAlert, Smartphone } from "lucide-react";
+import { Activity, Cpu, Globe, Radio, ShieldCheck, ShieldAlert, Smartphone } from "lucide-react";
 import { api } from "../lib/api.js";
-import { clockTime, getViewerLocation, isLive, relativeTime, simulateMotion } from "../lib/live.js";
+import { clockTime, getViewerLocation, isLive, relativeTime, reportViewerLocation } from "../lib/live.js";
 
 function heartbeatLabel(heartbeat) {
   if (!heartbeat || typeof heartbeat !== "object") return "--";
@@ -97,17 +97,17 @@ export default function DeviceInsight({ device, onSimulated }) {
   const distanceKm = stats?.distance_tracked_km;
   const peakSpeed = stats?.peak_speed_kph;
 
-  async function simulate() {
+  async function report() {
     setSimulating(true);
     setSimError("");
     try {
       const viewer = await getViewerLocation();
-      await simulateMotion(device, api, viewer);
+      await reportViewerLocation(device, api, viewer);
       const items = await api.locations(device.id, 1);
       if (items.length) setLast(items[0]);
       onSimulated?.();
     } catch (err) {
-      setSimError(err.message || "Simulation failed (grant consent / location access)");
+      setSimError(err.message || "Could not report location (grant consent / location access first)");
     } finally {
       setSimulating(false);
     }
@@ -167,6 +167,11 @@ export default function DeviceInsight({ device, onSimulated }) {
         <InsightRow icon={fraud?.anomaly_count > 0 ? <ShieldAlert size={13} /> : <ShieldCheck size={13} />} label="FRAUD">
           {fraudLabel(fraud)}
         </InsightRow>
+        <InsightRow icon={<Globe size={13} />} label="SOURCE / IP">
+          {(last?.source || device?.latest_location?.source || "--").toUpperCase()}
+          {" · "}
+          {last?.ip_address || device?.ip_address || "--"}
+        </InsightRow>
         <InsightRow icon={<Radio size={13} />} label="HEARTBEAT">
           {heartbeatLabel(heartbeat)} {heartbeat?.updates && heartbeat.updates.length ? `(${heartbeat.updates.length} pings)` : ""}
         </InsightRow>
@@ -177,10 +182,12 @@ export default function DeviceInsight({ device, onSimulated }) {
 
       {simError && <div className="inline-error">{simError}</div>}
 
-      <button className="command-button insight-simulate" onClick={simulate} disabled={simulating} type="button">
-        <Activity size={14} /> {simulating ? "SIMULATING SIGNAL…" : "SIMULATE DEVICE SIGNAL"}
+      <button className="command-button insight-simulate" onClick={report} disabled={simulating} type="button">
+        <Activity size={14} /> {simulating ? "REPORTING…" : "REPORT MY GPS LOCATION"}
       </button>
-      <p className="insight-hint">No hardware yet? Simulate a signal to watch this device go live on the map, exactly as a real tracker feed would appear.</p>
+      <p className="insight-hint">
+        No tracker feed yet? Reporting records this device's position as <strong>your current exact GPS coordinates</strong> through the real ingest pipeline, with this machine's true source IP — no mock movement.
+      </p>
     </section>
   );
 }
