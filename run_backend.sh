@@ -11,6 +11,7 @@ set -eu
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 VENV="$ROOT/build/venv"
 BE_PORT="${BE_PORT:-8000}"
+BIND_HOST="${HOST:-127.0.0.1}"
 
 # ---- 0. The built UI must exist (backend serves it at the root) ----
 if [ ! -f "$ROOT/frontend/dist/index.html" ]; then
@@ -41,8 +42,8 @@ DATA_DIR="$ROOT/backend/data"
 DATABASE_URL="sqlite:///$DATA_DIR/nova.sqlite3"
 export NOVA_MODE ENVIRONMENT DATA_DIR DATABASE_URL
 
-printf '[NOVA] NOVA GPS running at -> http://127.0.0.1:%s\n' "$BE_PORT"
+printf '[NOVA] NOVA GPS running at -> http://%s:%s\n' "$BIND_HOST" "$BE_PORT"
 printf '[NOVA] Ctrl+C to stop\n'
 
 cd "$ROOT/backend"
-exec "$VENV/bin/python" -m uvicorn main:app --host 127.0.0.1 --port "$BE_PORT"
+exec "$VENV/bin/python" -m uvicorn main:app --host "$BIND_HOST" --port "$BE_PORT"

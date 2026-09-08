@@ -1,0 +1,41 @@
+name: nova-agent-android
+
+on:
+  push:
+    branches: ["main"]
+    paths: ["agent/android/**", ".github/workflows/agent-build.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent/android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: "platforms;android-34 build-tools;34.0.0"
+
+      - name: Validate gradle wrapper
+        run: test -x ./gradlew
+
+      - name: Assemble debug APK
+        run: ./gradlew app:assembleDebug --no-daemon
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nova-agent-debug
+          path: agent/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 30

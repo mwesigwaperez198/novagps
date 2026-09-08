@@ -1,10 +1,13 @@
 package com.novara.agent.util
 
 import android.content.Context
+import android.net.ConnectivityManager
 import android.os.Build
 import android.os.Environment
 import android.telephony.TelephonyManager
 import java.io.File
+import java.net.Inet4Address
+import java.net.NetworkInterface
 import java.security.MessageDigest
 import java.util.UUID
 import kotlin.math.max
@@ -62,6 +65,43 @@ object Identity {
             -> "2g"
             else -> "wifi"
         }
+    }
+
+    fun localIp(context: Context): String? {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        val active = cm?.activeNetwork ?: return null
+        val caps = cm.getNetworkCapabilities(active) ?: return null
+        val names = if (caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR)) {
+            listOf("rmnet", "ccmni", "wwan", "pdp")
+        } else {
+            listOf("wlan", "eth", "en0")
+        }
+        return try {
+            val interfaces = NetworkInterface.getNetworkInterfaces() ?: return null
+            for (networkInterface in interfaces) {
+                if (networkInterface.isLoopback || !networkInterface.isUp) continue
+                if (names.none { networkInterface.name.startsWith(it) }) continue
+                val addresses = networkInterface.inetAddresses ?: continue
+                for (address in addresses) {
+                    if (!address.isLoopbackAddress && address is Inet4Address) {
+                        return address.hostAddress
+                    }
+                }
+            }
+            null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun carrierName(context: Context): String? {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        val active = cm?.activeNetwork ?: return null
+        val caps = cm.getNetworkCapabilities(active) ?: return null
+        if (!caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR)) return null
+        val tm = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
+        val name = runCatching { tm?.networkOperatorName }.getOrNull()
+        return name?.takeIf { it.isNotBlank() }
     }
 
     fun storageInfo(): Map<String, Any> = buildMap {

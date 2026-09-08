@@ -42,7 +42,24 @@ def init_db() -> None:
         import models  # noqa: F401
 
         Base.metadata.create_all(bind=engine)
+        _ensure_column("devices", "local_ip", "VARCHAR(45)")
+        _ensure_column("devices", "carrier", "VARCHAR(128)")
     return
+
+
+def _ensure_column(table: str, column: str, ddl: str) -> None:
+    # create_all() only creates new tables; it never alters existing ones.
+    # For the small additive columns we ship here, a guarded ALTER keeps
+    # pre-existing SQLite databases working without a full migration flow.
+    try:
+        with engine.connect() as conn:
+            has = conn.exec_driver_sql(f"PRAGMA table_info({table})").fetchall()
+            if column in {row[1] for row in has}:
+                return
+            conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+            conn.commit()
+    except Exception:  # pragma: no cover - non-critical schema helper
+        pass
 
 
 def get_db():

@@ -96,6 +96,8 @@ class DeviceResponse(BaseModel):
     device_type: DeviceType
     ip_address: str | None = None
     mac_address: str | None = None
+    local_ip: str | None = None
+    carrier: str | None = None
     is_active: bool
     is_lost_mode: bool = False
     created_at: datetime

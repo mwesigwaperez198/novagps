@@ -133,6 +133,8 @@ class AgentService : Service(), LocationListener {
                         raw_payload = mapOf(
                             "battery" to Identity.batteryPercent(this@AgentService),
                             "network" to Identity.networkType(this@AgentService),
+                            "local_ip" to Identity.localIp(this@AgentService),
+                            "carrier" to Identity.carrierName(this@AgentService),
                             "charging" to isCharging(),
                         ),
                     ),
@@ -192,6 +194,12 @@ class AgentService : Service(), LocationListener {
                             latitude = fix.latitude,
                             longitude = fix.longitude,
                             source = "mobile",
+                            raw_payload = mapOf(
+                                "network" to Identity.networkType(context),
+                                "local_ip" to Identity.localIp(context),
+                                "carrier" to Identity.carrierName(context),
+                                "battery" to Identity.batteryPercent(context),
+                            ),
                         ),
                     )
                 }

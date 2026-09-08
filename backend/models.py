@@ -66,6 +66,8 @@ class Device(Base):
     device_type: Mapped[DeviceType] = mapped_column(Enum(DeviceType, name="device_type"), nullable=False)
     ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
     mac_address: Mapped[str | None] = mapped_column(String(17), nullable=True)
+    local_ip: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    carrier: Mapped[str | None] = mapped_column(String(128), nullable=True)
     fcm_token: Mapped[str | None] = mapped_column(String(512), nullable=True)
     mqtt_topic: Mapped[str | None] = mapped_column(String(256), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

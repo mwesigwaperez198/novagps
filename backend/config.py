@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     sentry_dsn: str = Field("", alias="SENTRY_DSN")
     letsencrypt_email: str = Field("", alias="LETSENCRYPT_EMAIL")
     environment: str = Field("development", alias="ENVIRONMENT")
+    dev_owner_email: str = Field("", alias="DEV_OWNER_EMAIL")
     cors_origins: str = Field("http://localhost:5173,http://127.0.0.1:5173", alias="CORS_ORIGINS")
     sandbox_executor_mode: str = Field("mock", alias="SANDBOX_EXECUTOR_MODE")
     retention_days: int = Field(365, alias="RETENTION_DAYS")

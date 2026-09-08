@@ -1831,6 +1831,11 @@ select {
   word-break: break-word !important;
 }
 
+.insight-dim {
+  color: var(--text-muted, #8a94a6);
+  font-weight: 400;
+}
+
 .insight-divider {
   height: 1px;
   background: var(--line);

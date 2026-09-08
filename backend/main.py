@@ -149,7 +149,10 @@ def auth_login(
     if not email or not password:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email and password are required")
     settings = get_settings()
+    owner = settings.dev_owner_email.strip().lower()
     if settings.environment == "development":
+        if owner and email.strip().lower() != owner:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
         token = jwt.encode(
             {"sub": email, "role": "admin"},
             settings.secret_key,
@@ -174,6 +177,7 @@ def latest_location_dict(db: Session, device_id: str) -> dict[str, Any] | None:
     )
     if not location:
         return None
+    device = db.get(Device, device_id)
     return {
         "id": location.id,
         "latitude": location.latitude,
@@ -185,9 +189,22 @@ def latest_location_dict(db: Session, device_id: str) -> dict[str, Any] | None:
         "place_name": location.place_name,
         "source": location.source,
         "ip_address": location.ip_address,
+        "local_ip": device.local_ip if device else None,
+        "carrier": device.carrier if device else None,
         "recorded_at": location.recorded_at,
         "received_at": location.received_at,
     }
+
+
+def _apply_network_context(device: Device, raw_payload: dict[str, Any] | None) -> None:
+    if not raw_payload:
+        return
+    local_ip = str(raw_payload.get("local_ip") or "").strip() or None
+    carrier = str(raw_payload.get("carrier") or "").strip() or None
+    if local_ip:
+        device.local_ip = local_ip
+    if carrier:
+        device.carrier = carrier
 
 
 def device_response(db: Session, device: Device) -> DeviceResponse:
@@ -207,6 +224,8 @@ def device_response(db: Session, device: Device) -> DeviceResponse:
             "device_type": device.device_type,
             "ip_address": device.ip_address,
             "mac_address": device.mac_address,
+            "local_ip": device.local_ip,
+            "carrier": device.carrier,
             "is_active": device.is_active,
             "is_lost_mode": getattr(device, "is_lost_mode", False),
             "created_at": device.created_at,
@@ -413,6 +432,7 @@ def update_location(
         raw_payload=payload.raw_payload,
     )
     device.ip_address = ip_address
+    _apply_network_context(device, payload.raw_payload)
     db.add(location)
     create_audit(db, principal, "location.ingest", {"device_id": device.id, "source": payload.source})
     db.commit()

@@ -167,10 +167,17 @@ export default function DeviceInsight({ device, onSimulated }) {
         <InsightRow icon={fraud?.anomaly_count > 0 ? <ShieldAlert size={13} /> : <ShieldCheck size={13} />} label="FRAUD">
           {fraudLabel(fraud)}
         </InsightRow>
-        <InsightRow icon={<Globe size={13} />} label="SOURCE / IP">
-          {(last?.source || device?.latest_location?.source || "--").toUpperCase()}
-          {" · "}
-          {last?.ip_address || device?.ip_address || "--"}
+        <InsightRow icon={<Globe size={13} />} label="PUBLIC IP">
+          {(last?.ip_address || device?.ip_address || "--")}
+          {last?.source
+            ? <span className="insight-dim"> · {(last?.source || device?.latest_location?.source || "").toUpperCase()}</span>
+            : null}
+        </InsightRow>
+        <InsightRow icon={<Radio size={13} />} label="LOCAL IP">
+          {last?.local_ip || device?.local_ip || "--"}
+          {(last?.carrier || device?.carrier)
+            ? <span className="insight-dim"> · {(last?.carrier || device?.carrier).toUpperCase()}</span>
+            : null}
         </InsightRow>
         <InsightRow icon={<Radio size={13} />} label="HEARTBEAT">
           {heartbeatLabel(heartbeat)} {heartbeat?.updates && heartbeat.updates.length ? `(${heartbeat.updates.length} pings)` : ""}
@@ -186,7 +193,10 @@ export default function DeviceInsight({ device, onSimulated }) {
         <Activity size={14} /> {simulating ? "REPORTING…" : "REPORT MY GPS LOCATION"}
       </button>
       <p className="insight-hint">
-        No tracker feed yet? Reporting records this device's position as <strong>your current exact GPS coordinates</strong> through the real ingest pipeline, with this machine's true source IP — no mock movement.
+        No tracker feed yet? The installed NOVA agent on the phone streams an exact GPS fix every
+        30s over any network, reporting its public and local IP with each ping. This panel can also
+        post <strong>your current exact GPS coordinates</strong> through the real ingest pipeline for
+        an immediate point of reference.
       </p>
     </section>
   );
