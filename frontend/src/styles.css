@@ -1609,3 +1609,274 @@ select {
   font-size: 9px;
   letter-spacing: 0.5px;
 }
+
+/* ============ Live map (Leaflet) ============ */
+.workspace-consumer {
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+}
+
+.main-content {
+  position: relative;
+}
+
+.live-map-panel {
+  position: relative;
+  height: 100%;
+  min-height: 320px;
+  overflow: hidden;
+}
+
+.live-map {
+  position: absolute;
+  inset: 0;
+  background: #0a1410;
+}
+
+.live-map .leaflet-container {
+  background: #0a1410;
+  height: 100%;
+  width: 100%;
+  font-family: inherit;
+}
+
+.leaflet-popup-content-wrapper,
+.leaflet-popup-tip {
+  background: rgba(4, 16, 11, 0.96);
+  color: #d7ffe0;
+  border: 1px solid rgba(64, 215, 255, 0.4);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+}
+
+.leaflet-popup-content {
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 10px 12px;
+}
+
+.leaflet-container a.leaflet-popup-close-button {
+  color: #9fffc0;
+}
+
+.gps-poptip {
+  color: var(--line-hot);
+  font-size: 11px;
+}
+
+.leaflet-control-zoom a,
+.leaflet-bar {
+  background: rgba(3, 19, 7, 0.92) !important;
+  color: #d7ffe0 !important;
+  border-color: rgba(64, 215, 255, 0.35) !important;
+}
+
+.leaflet-control-layers,
+.leaflet-control-attribution,
+.leaflet-control-scale-line {
+  background: rgba(3, 19, 7, 0.85) !important;
+  color: #9fffc0 !important;
+}
+
+.leaflet-control-attribution a {
+  color: #40d7ff !important;
+}
+
+.gps-beacon-icon {
+  background: transparent;
+  border: none;
+}
+
+.gps-beacon {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gps-beacon-core {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--beacon, #40d7ff);
+  box-shadow: 0 0 14px var(--beacon, #40d7ff), 0 0 4px rgba(255, 255, 255, 0.7);
+  z-index: 2;
+}
+
+.gps-beacon-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid var(--beacon, #40d7ff);
+  opacity: 0.5;
+  animation: gpsPulse 1.6s ease-out infinite;
+}
+
+@keyframes gpsPulse {
+  0% { transform: scale(0.35); opacity: 0.75; }
+  100% { transform: scale(1.15); opacity: 0; }
+}
+
+.map-topbar {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 500;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.map-coords {
+  padding: 6px 9px;
+  background: rgba(3, 19, 7, 0.88);
+  border: 1px solid var(--line);
+  color: var(--line-hot);
+  font-size: 11px;
+}
+
+.map-topbar .command-button.is-busy {
+  border-color: var(--amber);
+  color: var(--amber);
+}
+
+.map-error {
+  position: absolute;
+  top: 44px;
+  right: 8px;
+  z-index: 500;
+  padding: 6px 9px;
+  border: 1px solid rgba(224, 64, 64, 0.55);
+  background: rgba(12, 2, 2, 0.85);
+  color: #ff7a7a;
+  font-size: 11px;
+}
+
+/* ============ Device insight (Find My style) ============ */
+.device-insight {
+  background:
+    linear-gradient(115deg, rgba(64, 215, 255, 0.05), transparent 45%),
+    rgba(1, 8, 5, 0.92);
+}
+
+.main-content > .device-insight {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 600;
+  width: min(360px, calc(100% - 16px));
+  max-height: calc(100% - 16px);
+  overflow: auto;
+  border: 1px solid rgba(64, 215, 255, 0.28);
+  box-shadow: 0 12px 38px rgba(0, 0, 0, 0.55);
+}
+
+.insight-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.insight-truck {
+  font-size: 13px;
+  line-height: 1;
+}
+
+.status-pill {
+  padding: 2px 8px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  border-radius: 2px;
+}
+
+.status-live {
+  color: #031307;
+  background: var(--line-hot);
+  box-shadow: 0 0 12px rgba(41, 224, 107, 0.7);
+}
+
+.status-offline {
+  color: #ffd7a0;
+  background: rgba(242, 137, 107, 0.22);
+  border: 1px solid rgba(242, 137, 107, 0.5);
+}
+
+.insight-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 10px;
+  padding: 10px;
+}
+
+.insight-cell span {
+  display: block;
+  color: var(--muted);
+  font-size: 9px;
+  letter-spacing: 0.6px;
+  margin-bottom: 2px;
+}
+
+.insight-cell strong {
+  font-size: 11px;
+  color: var(--text);
+  word-break: break-all;
+}
+
+.insight-wrap {
+  word-break: break-word !important;
+}
+
+.insight-divider {
+  height: 1px;
+  background: var(--line);
+  margin: 0 10px;
+}
+
+.insight-list {
+  padding: 6px 10px;
+}
+
+.insight-row {
+  display: grid;
+  grid-template-columns: 16px 88px minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+  padding: 4px 0;
+}
+
+.insight-row-icon {
+  color: var(--cyan);
+  display: inline-flex;
+  align-items: baseline;
+}
+
+.insight-row-label {
+  color: var(--muted);
+  font-size: 9px;
+  letter-spacing: 0.6px;
+}
+
+.insight-row-value {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+  word-break: break-word;
+  text-align: right;
+}
+
+.insight-simulate {
+  width: calc(100% - 20px);
+  margin: 4px 10px 0;
+}
+
+.insight-hint {
+  margin: 6px 12px 10px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+}

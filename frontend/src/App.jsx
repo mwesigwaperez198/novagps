@@ -7,6 +7,7 @@ import AuditLogPanel from "./components/AuditLogPanel.jsx";
 import BroadcastController from "./components/BroadcastController.jsx";
 import CameraPanel from "./components/CameraPanel.jsx";
 import ConsentPanel from "./components/ConsentPanel.jsx";
+import DeviceInsight from "./components/DeviceInsight.jsx";
 import DeviceList from "./components/DeviceList.jsx";
 import DeviceRegisterForm from "./components/DeviceRegisterForm.jsx";
 import DiscoveryPanel from "./components/DiscoveryPanel.jsx";
@@ -15,8 +16,8 @@ import ForensicsPanel from "./components/ForensicsPanel.jsx";
 import FirmwarePanel from "./components/FirmwarePanel.jsx";
 import GeofencePanel from "./components/GeofencePanel.jsx";
 import IDSPanel from "./components/IDSPanel.jsx";
+import LiveMap from "./components/LiveMap.jsx";
 import LoginScreen from "./components/LoginScreen.jsx";
-import MapPanel from "./components/MapPanel.jsx";
 import OSINTPanel from "./components/OSINTPanel.jsx";
 import RemotePanel from "./components/RemotePanel.jsx";
 import ScanPanel from "./components/ScanPanel.jsx";
@@ -233,7 +234,7 @@ export default function App() {
         </button>
       </header>
 
-      <section className="workspace">
+      <section className={`workspace ${viewMode === "consumer" ? "workspace-consumer" : ""}`}>
         {viewMode === "consumer" ? (
           <>
             <button
@@ -251,14 +252,16 @@ export default function App() {
               }} onRefresh={loadDevices} />
             </div>
             <div className="main-content">
-              <MapPanel device={selectedDevice} />
+              <LiveMap device={selectedDevice} />
+              <DeviceInsight device={selectedDevice} onSimulated={() => loadDevices()} />
             </div>
           </>
         ) : (
           <>
             <DeviceList devices={devices} selectedId={selectedDevice?.id} onSelect={setSelectedDeviceId} onRefresh={loadDevices} />
-            <MapPanel device={selectedDevice} />
+            <LiveMap device={selectedDevice} />
             <aside className="right-rail">
+              <DeviceInsight device={selectedDevice} onSimulated={() => loadDevices()} />
               <div className="panel-tabs">
                 {PANEL_TABS.map((tab) => (
                   <button
