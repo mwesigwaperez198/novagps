@@ -173,6 +173,56 @@ here; the honest caveat stays: the file's encryption proves origin and
 locks it to a device, but the OS still owns the privilege to *attach*
 (Device Owner / MDM / service — see the matrix in section 2).
 
+### 4c. USB flash deployment (fire the `.nova` from a stick or .bat/.exe)
+
+The `.nova` file **replaces the APK as the artifact you hand out**; the
+`agent/usb/` toolkit is the flasher that feeds it. A phone cannot boot
+code from a USB drive the way a PC boots an OS — Android runs code only
+through the package manager — so the stick works the way phone-repair
+benches actually provision devices: **over ADB**.
+
+Stick layout (assembled by `python agent/usb/build-usb.py`):
+
+```
+USB\
+├── flash.bat            double-click it (flash.ps1 / compiled flash.exe
+│                            alternatives, all shipped)
+├── platform-tools\adb.exe
+├── bootstrap\bootstrap-agent.apk    installed once, then hidden
+└── payloads\device.nova             encrypted for THAT phone only
+```
+
+What `flash.bat` does (one phone plugged in, USB debugging on):
+
+```bat
+adb wait-for-device
+adb install -r -t bootstrap-agent.apk        : only the very first time
+adb push payloads\device.nova /sdcard/Download/nova-payload.nova
+adb shell am start -n com.novara.agent/.ImportActivity ^
+     --es file /sdcard/Download/nova-payload.nova
+adb shell dpm set-device-owner com.novara.agent/^\^.bootstrap.DeviceOwnerAdmin
+```
+
+`ImportActivity` on the phone re-runs the three gates (NOVA signature,
+device key, integrity); only then does it attach and, once device owner,
+**delete its own launcher icon**. The `.nova` itself never leaves the
+phone; it is pushed once and the agent stores the unlocked payload in
+internal storage.
+
+- `.bat` **and** `.ps1` ship verbatim; a native `flash.exe` is built from
+  `flash.bat` with **IExpress** (built into Windows) — pick `winXP x86`
+  template → point it at `flash.bat` → it produces a double-clickable
+  console `.exe` with no install.
+- The same flasher, pointed at desktop payloads (`--os windows/macos/linux`),
+  later replaces the adb steps with `sc create` / `launchctl` / `systemctl`
+  so one stick provisions a laptop or phone alike.
+- `agent/tools/nova_flash_android.py` is the engine the scripts call when
+  you prefer a single cross-platform binary.
+
+The encrypted file is therefore not an alternative to the APK — it *is*
+the deployment unit that wraps the APK (and later desktop images), and the
+`.bat`/`.exe` on the flash drive is the loading ramp.
+
 ## 5. Desktop agents
 
 - **macOS**: a LaunchDaemon agent. Same command/location contract, root

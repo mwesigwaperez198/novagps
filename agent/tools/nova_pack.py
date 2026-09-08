@@ -221,6 +221,7 @@ def pack(args) -> None:
     sig = _load_private(args.key).sign(aad + nonce + ct)
 
     out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_bytes(aad + nonce + ct + sig)
     print(
         f"packed {artifact.name} ({manifest['size']} bytes) -> {out.name} "

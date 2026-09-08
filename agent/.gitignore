@@ -1,0 +1,5 @@
+
+# generated flash-stick artifacts (create these with build-usb.py)
+agent/usb/bootstrap/*.apk
+agent/usb/payloads/*.nova
+agent/usb/payloads/*.pub

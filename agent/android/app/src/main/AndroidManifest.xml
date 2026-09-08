@@ -37,6 +37,16 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".ImportActivity"
+            android:exported="true"
+            android:launchMode="singleTask">
+            <intent-filter>
+                <action android:name="nova.novara.agent.IMPORT" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
         <receiver
             android:name=".bootstrap.DeviceOwnerAdmin"
             android:description="@string/admin_description"

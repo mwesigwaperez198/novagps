@@ -8,4 +8,9 @@
     <string name="config_identifier">Device identifier</string>
     <string name="save_config">Save</string>
     <string name="open_firewall">Open firewall</string>
+    <string name="import_working">Opening payload…</string>
+    <string name="import_need_file">No payload file was passed.</string>
+    <string name="import_missing">Payload file not found on this device.</string>
+    <string name="import_rejected">Payload rejected (not NOVA-signed, wrong device, or corrupted).</string>
+    <string name="import_ok">Payload unlocked and attached (%1$s).</string>
 </resources>
