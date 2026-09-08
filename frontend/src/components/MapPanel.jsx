@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Compass, Navigation, RefreshCw } from "lucide-react";
+import { Activity, Compass, Navigation, RefreshCw } from "lucide-react";
 import * as THREE from "three";
 import { api } from "../lib/api.js";
 
@@ -334,6 +334,8 @@ export default function MapPanel({ device }) {
   const [cameraMode, setCameraMode] = useState("follow");
   const [geofences, setGeofences] = useState([]);
   const [cameras, setCameras] = useState([]);
+  const [simulating, setSimulating] = useState(false);
+  const [simError, setSimError] = useState("");
 
   const sourceLocation = device?.latest_location;
   const liveLocation = useMemo(
@@ -627,6 +629,41 @@ export default function MapPanel({ device }) {
     positionCamera(camera, modeRef.current, focus, projectedLatest);
   }, [device?.device_type, path, geofences, cameras]);
 
+  async function simulateSignal() {
+    if (!device?.identifier) return;
+    setSimulating(true);
+    setSimError("");
+    try {
+      const anchor = latest
+        ? { latitude: latest.latitude, longitude: latest.longitude }
+        : { latitude: 0.3476, longitude: 32.5825 };
+      const speeds = [12, 24, 38, 52, 61, 47, 33, 19];
+      let currentLat = anchor.latitude;
+      let currentLon = anchor.longitude;
+      for (const [index, speed] of speeds.entries()) {
+        currentLat += 0.0009 + Math.sin(index * 1.7) * 0.0004;
+        currentLon += 0.0026 + Math.cos(index * 1.3) * 0.0005;
+        await api.updateLocation({
+          identifier: device.identifier,
+          latitude: Number(currentLat.toFixed(6)),
+          longitude: Number(currentLon.toFixed(6)),
+          altitude: 1180,
+          speed,
+          heading: 122,
+          accuracy: 6,
+          source: "mobile",
+          raw_payload: { simulated: true, seq: index + 1 },
+        });
+      }
+      const items = await api.locations(device.id, 160);
+      setRouteHistory(items);
+    } catch (err) {
+      setSimError(err.message || "Simulation failed (grant consent first)");
+    } finally {
+      setSimulating(false);
+    }
+  }
+
   const modeIcons = {
     follow: Navigation,
     orbit: RefreshCw,
@@ -642,6 +679,15 @@ export default function MapPanel({ device }) {
         <span>3D_MISSION_VIEW</span>
         <code>{coordinateLabel}</code>
         <div className="mission-controls">
+          <button
+            className={`icon-button ${simulating ? "is-active" : ""}`}
+            onClick={simulateSignal}
+            disabled={simulating || !device?.identifier}
+            title={simulating ? "Simulating..." : "Simulate location signal for this device"}
+            type="button"
+          >
+            <Activity size={15} />
+          </button>
           {CAMERA_MODES.map((mode) => {
             const Icon = modeIcons[mode];
             return (
@@ -660,7 +706,8 @@ export default function MapPanel({ device }) {
       </div>
       <div className="mission-stage">
         <div ref={mountRef} className="mission-canvas" />
-        {!latest && <div className="mission-empty">WAITING_FOR_SIGNAL</div>}
+        {!latest && <div className="mission-empty">{simulating ? "SIMULATING_SIGNAL..." : "WAITING_FOR_SIGNAL"}</div>}
+        {simError && <div className="mission-error">{simError}</div>}
         <div className="mission-hud">
           <div>
             <span>SPD</span>

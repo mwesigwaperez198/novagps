@@ -45,6 +45,7 @@ export const api = {
   devices: () => request("/devices"),
   search: (q) => request(`/search?q=${encodeURIComponent(q)}`),
   locations: (deviceId, limit = 160) => request(`/devices/${encodeURIComponent(deviceId)}/locations?limit=${limit}`),
+  updateLocation: (payload) => request("/update-location", { method: "POST", body: JSON.stringify(payload) }),
   register: (payload) => request("/register", { method: "POST", body: JSON.stringify(payload) }),
   consent: (payload) => request("/consent", { method: "POST", body: JSON.stringify(payload) }),
   consentRevoke: (payload) => request("/consent/revoke", { method: "POST", body: JSON.stringify(payload) }),
