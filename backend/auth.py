@@ -11,7 +11,7 @@ from config import get_settings
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token", auto_error=False)
 
 
-ROLE_RANK = {"viewer": 10, "auditor": 20, "operator": 30, "admin": 40}
+ROLE_RANK = {"device": 0, "viewer": 10, "auditor": 20, "operator": 30, "admin": 40}
 
 
 @dataclass(frozen=True)
@@ -46,3 +46,20 @@ def require_roles(*roles: str) -> Callable[[Principal], Principal]:
         return principal
 
     return dependency
+
+
+def bear_token(request) -> str | None:
+    """Pull the access token out of the Authorization header, if present."""
+    header = request.headers.get("authorization", "")
+    if header.lower().startswith("bearer "):
+        return header[7:].strip()
+    return None
+
+
+def device_principal(identifier: str) -> Principal:
+    """Principal that represents an authenticated device (not a user).
+
+    Used for audit framing on device-facing endpoints. device role ranks below
+    every human role so it can never satisfy require_roles(...).
+    """
+    return Principal(subject=f"device:{identifier}", role="device")

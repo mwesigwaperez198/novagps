@@ -17,7 +17,7 @@ from sqlalchemy import delete, func, or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from auth import Principal, get_current_principal, require_roles
+from auth import Principal, bear_token, device_principal, get_current_principal, require_roles
 from broadcast_auth import token_allowed
 from command_registry import CommandRegistryError, execute_registered_command
 from config import get_settings
@@ -150,16 +150,19 @@ def auth_login(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email and password are required")
     settings = get_settings()
     owner = settings.dev_owner_email.strip().lower()
-    if settings.environment == "development":
-        if owner and email.strip().lower() != owner:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-        token = jwt.encode(
-            {"sub": email, "role": "admin"},
-            settings.secret_key,
-            algorithm=settings.jwt_algorithm,
-        )
-        return {"access_token": token, "token_type": "bearer", "role": "admin", "email": email}
-    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    # Production requires the owner allowlist to be configured (fail closed).
+    if settings.environment == "production" and not owner:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    # Only the configured owner may log in, in every environment. This is the
+    # security boundary chosen for NOVA (a personal, consent-first tracker).
+    if owner and email.strip().lower() != owner:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    token = jwt.encode(
+        {"sub": email, "role": "admin"},
+        settings.secret_key,
+        algorithm=settings.jwt_algorithm,
+    )
+    return {"access_token": token, "token_type": "bearer", "role": "admin", "email": email}
 
 
 def hash_text(value: str | None) -> str | None:
@@ -278,6 +281,24 @@ def resolve_device(db: Session, payload: LocationUpdateRequest) -> Device:
     if not device or not device.is_active:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
     return device
+
+
+def authorize_device_or_user(db: Session, request: Request, device: Device) -> Principal:
+    """Authenticate a device-facing write.
+
+    The phone proves itself by a registered, active device identifier plus the
+    caller's active-consent check (applied by the endpoint). A human caller may
+    instead present a valid bearer token (dashboard). Returns the Principal to
+    frame the audit log: a synthetic device principal when the phone calls in,
+    or the human principal when a token was supplied.
+    """
+    token = bear_token(request)
+    if token:
+        try:
+            return get_current_principal(token=token)
+        except HTTPException:
+            pass
+    return device_principal(device.identifier)
 
 
 def safe_sql_identifier(value: str) -> str:
@@ -409,10 +430,10 @@ def update_location(
     payload: LocationUpdateRequest,
     request: Request,
     db: Session = Depends(get_db),
-    principal: Principal = Depends(get_current_principal),
 ) -> dict[str, Any]:
     device = resolve_device(db, payload)
     require_active_consent(db, device)
+    principal = authorize_device_or_user(db, request, device)
     recorded_at = payload.recorded_at or utcnow()
     place_name = payload.place_name or reverse_geocode(payload.latitude, payload.longitude)
     ip_address = client_ip(request)
@@ -513,8 +534,8 @@ def traccar_compatible_update(
     lon: float = Query(..., ge=-180, le=180),
     speed: float | None = Query(None, ge=0),
     bearing: float | None = Query(None, ge=0, le=360),
+    request: Request,
     db: Session = Depends(get_db),
-    principal: Principal = Depends(get_current_principal),
 ) -> dict[str, Any]:
     payload = LocationUpdateRequest(
         identifier=id,
@@ -525,7 +546,7 @@ def traccar_compatible_update(
         source="traccar",
         raw_payload={"id": id, "lat": lat, "lon": lon, "speed": speed, "bearing": bearing},
     )
-    return update_location(payload, db, principal)
+    return update_location(payload, request, db)
 
 
 @app.get("/devices", response_model=list[DeviceResponse])
@@ -1250,11 +1271,13 @@ def device_pending_commands(
 @app.post("/device/pull-commands")
 def device_pull_commands(
     payload: AgentPullCommandsRequest,
+    request: Request,
     db: Session = Depends(get_db),
-    principal: Principal = Depends(get_current_principal),
 ) -> dict:
     device = resolve_device(db, payload)
     require_active_consent(db, device)
+    principal = authorize_device_or_user(db, request, device)
+    create_audit(db, principal, "agent.pull_commands", {"device_id": device.id})
     commands = push_service.get_pending_commands(db, device.id)
     return {"commands": commands}
 
@@ -1262,11 +1285,12 @@ def device_pull_commands(
 @app.post("/device/ack-command")
 def device_ack_command(
     payload: AgentAckCommandRequest,
+    request: Request,
     db: Session = Depends(get_db),
-    principal: Principal = Depends(get_current_principal),
 ) -> dict:
     device = resolve_device(db, payload)
     require_active_consent(db, device)
+    principal = authorize_device_or_user(db, request, device)
     push_service.acknowledge_command(db, payload.command_id)
     create_audit(db, principal, "agent.ack_command", {"device_id": device.id, "command_id": payload.command_id})
     return {"status": "acknowledged"}

@@ -1,0 +1,34 @@
+# NOVA GPS — Render Blueprint (single Web Service: FastAPI backend + dashboard UI).
+# Deploys the repo-root Dockerfile (bundles backend + frontend/dist).
+#
+# Required manual step (set in the Render dashboard env once, then re-deploy):
+#   SECRET_KEY        -> secure random, e.g. python3 -c "import secrets;print(secrets.token_hex(32))"
+#   DEV_OWNER_EMAIL   -> your email; the ONLY account allowed to log in (dev allowlist).
+#                        Set ENVIRONMENT=development to keep the allowlist behaviour,
+#                        or production to also enable per-IP rate limiting.
+
+services:
+  - type: web
+    name: nova-gps
+    runtime: docker
+    repo: https://github.com/mwesigwaperez198/novagps.git
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: NOVA_MODE
+        value: portable
+      - key: ENVIRONMENT
+        value: production
+      - key: DATA_DIR
+        value: /var/data
+      - key: DATABASE_URL
+        value: sqlite:////var/data/nova.sqlite3
+      - key: SECRET_KEY
+        sync: false
+      - key: DEV_OWNER_EMAIL
+        sync: false
+    disk:
+      name: nova-gps-data
+      mountPath: /var/data
+      sizeGB: 1
