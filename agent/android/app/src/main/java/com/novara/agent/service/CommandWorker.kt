@@ -36,6 +36,7 @@ object CommandWorker {
         val payload = command.payload
         when (command.command_type) {
             "locate" -> reportNow(context)
+            "report" -> reportNow(context)
             "lock" -> lock(context, str(payload["message"]))
             "lost" -> {
                 lostMode(context, payload)

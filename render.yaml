@@ -20,6 +20,12 @@ services:
         value: portable
       - key: ENVIRONMENT
         value: production
+      # AUTO_ENROLL=1 lets any device with a configured identifier phone home and
+      # self-register on first contact (device + consent auto-created). Keep for
+      # the cross-device live test; set to 0/remove when you want strict manual
+      # registration back.
+      - key: AUTO_ENROLL
+        value: "1"
       - key: DATA_DIR
         value: /var/data
       - key: DATABASE_URL

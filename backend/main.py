@@ -2,7 +2,7 @@ import hashlib
 import logging
 import re
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -32,6 +32,7 @@ from models import (
     Consent,
     ConsentStatus,
     Device,
+    DeviceType,
     ImportedUser,
     Location,
     utcnow,
@@ -272,12 +273,64 @@ def require_active_consent(db: Session, device: Device) -> None:
         )
 
 
+def ensure_device_for_identifier(
+    db: Session,
+    identifier: str,
+    source: str = "auto",
+    raw_payload: dict[str, Any] | None = None,
+) -> Device | None:
+    """Return the device for an agent-facing identifier.
+
+    Under AUTO_ENROLL the first contact with an unknown identifier provisions
+    the device row plus an active consent automatically (self-registration), so
+    no dashboard registration is needed. When auto-enroll is off this returns
+    None so the caller can keep the strict 404 behaviour.
+    """
+    if not identifier or not IDENTIFIER_PATTERN.fullmatch(identifier):
+        return None
+    device = db.query(Device).filter(Device.identifier == identifier).first()
+    if device:
+        return device if device.is_active else None
+    if not settings.auto_enroll:
+        return None
+    device = Device(
+        name=f"Auto-{identifier}",
+        email=settings.dev_owner_email or "devices@novagps.local",
+        phone="",
+        identifier=identifier,
+        device_type=DeviceType.other,
+        is_active=True,
+    )
+    os_type = (raw_payload or {}).get("os_type") if isinstance((raw_payload or {}).get("os_type"), str) else None
+    model = (raw_payload or {}).get("model") if isinstance((raw_payload or {}).get("model"), str) else None
+    manufacturer = (raw_payload or {}).get("manufacturer") if isinstance((raw_payload or {}).get("manufacturer"), str) else None
+    if os_type:
+        device.os_type = os_type[:64]
+    if model:
+        device.model = model[:160]
+    if manufacturer:
+        device.manufacturer = manufacturer[:160]
+    db.add(device)
+    db.flush()
+    db.add(
+        Consent(
+            device_id=device.id,
+            user_email=device.email,
+            source=source,
+            scope="location,tracking,security",
+        )
+    )
+    return device
+
+
 def resolve_device(db: Session, payload: LocationUpdateRequest) -> Device:
     query = db.query(Device)
     if payload.device_id:
         device = query.filter(Device.id == payload.device_id).first()
     else:
-        device = query.filter(Device.identifier == payload.identifier).first()
+        device = ensure_device_for_identifier(db, payload.identifier or "", raw_payload=payload.raw_payload)
+        if device is None:
+            device = query.filter(Device.identifier == payload.identifier).first()
     if not device or not device.is_active:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
     return device
@@ -369,7 +422,7 @@ def capture_consent(
     if payload.device_id:
         device = db.get(Device, payload.device_id)
     if device is None and payload.identifier:
-        device = db.query(Device).filter(Device.identifier == payload.identifier).first()
+        device = ensure_device_for_identifier(db, payload.identifier, source="consent")
     if not device or not device.is_active:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
 
@@ -525,8 +578,8 @@ def device_self_locate(
     accuracy: float | None = Query(None, ge=0),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    device = db.query(Device).filter(Device.identifier == identifier, Device.is_active.is_(True)).first()
-    if not device:
+    device = ensure_device_for_identifier(db, identifier, source="locate")
+    if not device or not device.is_active:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found or inactive")
     require_active_consent(db, device)
     place_name = reverse_geocode(latitude, longitude)
@@ -556,7 +609,20 @@ def device_self_locate(
     }
 
 
-@app.get("/traccar", status_code=status.HTTP_202_ACCEPTED)
+def _parse_traccar_timestamp(raw: str) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        pass
+    try:
+        return datetime.fromtimestamp(float(raw), tz=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+@app.api_route("/traccar", methods=["GET", "POST"], status_code=status.HTTP_202_ACCEPTED)
 def traccar_compatible_update(
     request: Request,
     id: str = Query(..., min_length=3, max_length=160),
@@ -564,16 +630,35 @@ def traccar_compatible_update(
     lon: float = Query(..., ge=-180, le=180),
     speed: float | None = Query(None, ge=0),
     bearing: float | None = Query(None, ge=0, le=360),
+    altitude: float | None = Query(None),
+    accuracy: float | None = Query(None, ge=0),
+    timestamp: str | None = Query(None, max_length=40),
+    hdop: float | None = Query(None, ge=0),
+    battery: float | None = Query(None, ge=0),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     payload = LocationUpdateRequest(
         identifier=id,
         latitude=lat,
         longitude=lon,
+        altitude=altitude,
         speed=speed,
         heading=bearing,
+        accuracy=accuracy,
         source="traccar",
-        raw_payload={"id": id, "lat": lat, "lon": lon, "speed": speed, "bearing": bearing},
+        recorded_at=_parse_traccar_timestamp(timestamp) if timestamp else None,
+        raw_payload={
+            "id": id,
+            "lat": lat,
+            "lon": lon,
+            "speed": speed,
+            "bearing": bearing,
+            "altitude": altitude,
+            "accuracy": accuracy,
+            "timestamp": timestamp,
+            "hdop": hdop,
+            "battery": battery,
+        },
     )
     return update_location(payload, request, db)
 
