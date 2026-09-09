@@ -362,12 +362,41 @@ def register_device(
 @app.post("/consent", status_code=status.HTTP_201_CREATED)
 def capture_consent(
     payload: ConsentRequest,
+    request: Request,
     db: Session = Depends(get_db),
-    principal: Principal = Depends(require_roles("operator", "admin")),
 ) -> dict[str, str]:
-    device = db.get(Device, payload.device_id)
-    if not device:
+    device = None
+    if payload.device_id:
+        device = db.get(Device, payload.device_id)
+    if device is None and payload.identifier:
+        device = db.query(Device).filter(Device.identifier == payload.identifier).first()
+    if not device or not device.is_active:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
+
+    token = bear_token(request)
+    principal: Principal | None = None
+    if token:
+        try:
+            principal = get_current_principal(token=token)
+        except HTTPException:
+            principal = None
+    if principal is not None:
+        principal = require_roles("operator", "admin")(principal)
+    else:
+        principal = device_principal(device.identifier)
+
+    if payload.granted is False:
+        db.query(Consent).filter(
+            Consent.device_id == device.id, Consent.status == ConsentStatus.active
+        ).update({"status": ConsentStatus.revoked, "revoked_at": utcnow()}, synchronize_session=False)
+        create_audit(db, principal, "consent.revoke", {"device_id": device.id, "scope": payload.scope})
+        db.commit()
+        anchor = blockchain_anchor.anchor_consent_event(
+            db, consent_id=f"revoke-{device.id}", device_id=device.id, action="revoke",
+            payload={"scope": payload.scope, "actor": principal.subject},
+        )
+        return {"status": "revoked", "device_id": device.id, "chain_hash": anchor.chain_hash}
+
     consent = Consent(
         device_id=device.id,
         user_email=device.email,

@@ -26,10 +26,12 @@ class DeviceRegisterRequest(BaseModel):
 
 
 class ConsentRequest(BaseModel):
-    device_id: str
-    source: str = Field(..., min_length=1, max_length=120)
-    scope: str = Field(..., min_length=1, max_length=1000)
+    device_id: str | None = None
+    identifier: str | None = None
+    source: str = Field("app", min_length=1, max_length=120)
+    scope: str = Field("location,tracking,security", min_length=1, max_length=1000)
     proof: str | None = Field(None, max_length=2000)
+    granted: bool | None = True
 
 
 class ConsentRevokeRequest(BaseModel):
