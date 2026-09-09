@@ -72,7 +72,7 @@ class ImportActivity : AppCompatActivity() {
         val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
         if (!dpm.isDeviceOwnerApp(packageName)) return
         val launcher = ComponentName(this, MainActivity::class.java)
-        dpm.setComponentEnabledSetting(
+        packageManager.setComponentEnabledSetting(
             launcher,
             PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
             DevicePolicyManager.FLAG_OVERRIDE_EXEMPT_SIGNATURE,

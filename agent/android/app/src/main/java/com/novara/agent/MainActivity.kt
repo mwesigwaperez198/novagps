@@ -83,16 +83,8 @@ class MainActivity : AppCompatActivity() {
             val consented = withContext(Dispatchers.IO) { grantConsent() }
             withContext(Dispatchers.Main) {
                 Config.registered = consented || Config.registered
-                PollCommandWorker.schedule(this)
+                PollCommandWorker.schedule(this@MainActivity)
                 AgentService.startForeground(this@MainActivity)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-                    val who = DeviceOwnerAdmin.componentName(this@MainActivity)
-                    if (dpm.isDeviceOwnerApp(packageName)) {
-                        runCatching { dpm.setAlwaysOnVpnLockdown(who, true) }
-                        runCatching { dpm.setBatteryOptimizationExemptions(listOf(packageName)) }
-                    }
-                }
                 statusLine()
                 Toast.makeText(
                     this@MainActivity,
@@ -133,7 +125,6 @@ class MainActivity : AppCompatActivity() {
         val who = DeviceOwnerAdmin.componentName(this)
         if (dpm.isDeviceOwnerApp(packageName)) {
             runCatching { dpm.setAlwaysOnVpnPackage(who, packageName, true) }
-            runCatching { dpm.setAlwaysOnVpnLockdown(who, true) }
             Toast.makeText(this, "Protection active (always-on + lockdown).", Toast.LENGTH_SHORT).show()
         } else {
             Toast.makeText(this, "Protection active. Make this app device owner for lockdown mode.", Toast.LENGTH_LONG).show()

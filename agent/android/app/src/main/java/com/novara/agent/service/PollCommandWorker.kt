@@ -10,6 +10,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.novara.agent.NovaAgentApp
 import com.novara.agent.R
+import com.novara.agent.api.NovaApi
 import com.novara.agent.util.Config
 import java.util.concurrent.TimeUnit
 

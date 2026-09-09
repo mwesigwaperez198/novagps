@@ -1,6 +1,7 @@
 package com.novara.agent.api
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 
 // Mirror of backend/schemas.py — keep field names identical to the wire
 // contract so the FastAPI models accept these payloads untouched.
@@ -41,7 +42,7 @@ data class LocationUpdate(
     val heading: Double? = null,
     val accuracy: Double? = null,
     val source: String = "mobile",
-    val raw_payload: Map<String, Any> = emptyMap(),
+    val raw_payload: Map<String, JsonElement> = emptyMap(),
 )
 
 @Serializable
@@ -61,7 +62,7 @@ data class CommandAck(
 data class RemoteCommand(
     val command_id: String,
     val command_type: String,
-    val payload: Map<String, Any> = emptyMap(),
+    val payload: Map<String, JsonElement> = emptyMap(),
     val status: String = "pending",
     val attempts: Int = 0,
     val created_at: String = "",

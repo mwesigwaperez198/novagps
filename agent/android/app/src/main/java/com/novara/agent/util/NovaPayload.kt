@@ -18,6 +18,7 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 
 /**
  * On-device gate for .nova payloads. A packed file is useless here unless
@@ -76,7 +77,8 @@ object NovaPayload {
         val dek = hkdfSha256(shared, salt, "nova/payload-v1", 32)
 
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(dek, "AES"), GCMParameterSpec(128, nonce), aad)
+        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(dek, "AES"), GCMParameterSpec(128, nonce))
+        cipher.updateAAD(aad)
         val clear = runCatching { cipher.doFinal(ct) }.getOrNull() ?: return null
 
         val manifestLen = clear.copyOfRange(0, 8).let { b ->
@@ -91,14 +93,16 @@ object NovaPayload {
         return Opened(manifest, artifact, manifest["name"]?.jsonPrimitive?.content ?: name)
     }
 
-    private fun parseHeader(header: ByteArray): Triple<String, String, String, Int> {
+    private data class Header(val os: String, val arch: String, val name: String, val bodyIndex: Int)
+
+    private fun parseHeader(header: ByteArray): Header {
         val osLen = header[6].toInt()
         val archLen = header[7 + osLen].toInt()
         val nameLen = header[8 + osLen + archLen].toInt()
         val os = String(header.copyOfRange(7, 7 + osLen))
         val arch = String(header.copyOfRange(8 + osLen, 8 + osLen + archLen))
         val name = String(header.copyOfRange(9 + osLen + archLen, 9 + osLen + archLen + nameLen))
-        return Triple(os, arch, name)
+        return Header(os, arch, name, 9 + osLen + archLen + nameLen)
     }
 
     private fun split(data: ByteArray): HeaderPair {

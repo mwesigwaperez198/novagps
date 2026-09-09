@@ -54,7 +54,7 @@ object Identity {
     fun networkType(context: Context): String {
         val tm = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
         return when (tm?.dataNetworkType) {
-            TelephonyManager.NETWORK_TYPE_LTE, TelephonyManager.NETWORK_TYPE_LTE_CA -> "lte"
+            TelephonyManager.NETWORK_TYPE_LTE -> "lte"
             TelephonyManager.NETWORK_TYPE_NR -> "5g"
             TelephonyManager.NETWORK_TYPE_HSDPA,
             TelephonyManager.NETWORK_TYPE_HSPAP,

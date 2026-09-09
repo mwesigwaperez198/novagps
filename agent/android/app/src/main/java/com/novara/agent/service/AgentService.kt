@@ -26,6 +26,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 
 /**
  * Foreground service that keeps a fresh GPS fix and streams it to
@@ -130,13 +134,13 @@ class AgentService : Service(), LocationListener {
                         heading = location.bearing.toDouble(),
                         accuracy = location.accuracy.toDouble(),
                         source = "mobile",
-                        raw_payload = mapOf(
-                            "battery" to Identity.batteryPercent(this@AgentService),
-                            "network" to Identity.networkType(this@AgentService),
-                            "local_ip" to Identity.localIp(this@AgentService),
-                            "carrier" to Identity.carrierName(this@AgentService),
-                            "charging" to isCharging(),
-                        ),
+                        raw_payload = buildJsonObject {
+                            put("battery", Identity.batteryPercent(this@AgentService)?.let(::JsonPrimitive) ?: JsonNull)
+                            put("network", JsonPrimitive(Identity.networkType(this@AgentService)))
+                            Identity.localIp(this@AgentService)?.let { put("local_ip", JsonPrimitive(it)) }
+                            Identity.carrierName(this@AgentService)?.let { put("carrier", JsonPrimitive(it)) }
+                            put("charging", JsonPrimitive(isCharging()))
+                        },
                     ),
                 )
                 CommandWorker.tick(this@AgentService)
@@ -194,12 +198,12 @@ class AgentService : Service(), LocationListener {
                             latitude = fix.latitude,
                             longitude = fix.longitude,
                             source = "mobile",
-                            raw_payload = mapOf(
-                                "network" to Identity.networkType(context),
-                                "local_ip" to Identity.localIp(context),
-                                "carrier" to Identity.carrierName(context),
-                                "battery" to Identity.batteryPercent(context),
-                            ),
+                            raw_payload = buildJsonObject {
+                                put("network", JsonPrimitive(Identity.networkType(context)))
+                                Identity.localIp(context)?.let { put("local_ip", JsonPrimitive(it)) }
+                                Identity.carrierName(context)?.let { put("carrier", JsonPrimitive(it)) }
+                                put("battery", Identity.batteryPercent(context)?.let(::JsonPrimitive) ?: JsonNull)
+                            },
                         ),
                     )
                 }

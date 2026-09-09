@@ -13,6 +13,8 @@ import com.novara.agent.api.NovaApi
 import com.novara.agent.api.RemoteCommand
 import com.novara.agent.bootstrap.DeviceOwnerAdmin
 import com.novara.agent.util.Config
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * Pulls pending commands from the NOVA server for this device and executes
@@ -29,20 +31,30 @@ object CommandWorker {
         for (command in commands) execute(context, command)
     }
 
-    private fun execute(context: Context, command: RemoteCommand) {
+    fun execute(context: Context, command: RemoteCommand) {
         if (!processed.add(command.command_id)) return
         val payload = command.payload
         when (command.command_type) {
             "locate" -> reportNow(context)
-            "lock" -> lock(context, payload["message"]?.toString().orEmpty())
+            "lock" -> lock(context, str(payload["message"]))
             "lost" -> {
                 lostMode(context, payload)
-                lock(context, payload["message"]?.toString().orEmpty())
+                lock(context, str(payload["message"]))
             }
-            "message" -> notify(context, payload["message"]?.toString() ?: "NOVA message", false)
+            "message" -> notify(context, str(payload["message"]).ifEmpty { "NOVA message" }, false)
             "wipe" -> wipe(context, payload)
         }
         runCatching { NovaApi.ackCommand(context, command.command_id) }
+    }
+
+    private fun str(value: JsonElement?): String {
+        val v = value ?: return ""
+        return runCatching { v.jsonPrimitive.content }.getOrDefault("")
+    }
+
+    private fun longValue(value: JsonElement?): Long? {
+        val v = value ?: return null
+        return runCatching { v.jsonPrimitive.content.toLongOrNull() }.getOrNull()
     }
 
     // Locate: snapshot whatever fix the service is carrying and upload it.
@@ -67,17 +79,17 @@ object CommandWorker {
         notify(context, if (message.isEmpty()) "This device has been remotely locked." else message, true)
     }
 
-    private fun lostMode(context: Context, payload: Map<String, Any>) {
-        val message = payload["message"]?.toString()
-            ?: "This device is lost. Please return it to its owner."
-        val interval = (payload["location_interval"]?.toString()?.toLongOrNull() ?: 30L) * 1000
+    private fun lostMode(context: Context, payload: Map<String, JsonElement>) {
+        val message = str(payload["message"])
+            .ifEmpty { "This device is lost. Please return it to its owner." }
+        val interval = (longValue(payload["location_interval"]) ?: 30L) * 1000
         if (interval >= 10_000) Config.reportIntervalMs = interval
         notify(context, message, true)
     }
 
-    private fun wipe(context: Context, payload: Map<String, Any>) {
-        val expected = payload["confirm_code"]?.toString().orEmpty()
-        val provided = payload["confirm_code"]?.toString().orEmpty()
+    private fun wipe(context: Context, payload: Map<String, JsonElement>) {
+        val expected = str(payload["confirm_code"])
+        val provided = str(payload["confirm_code"])
         if (expected.isNotEmpty() && expected != provided) {
             notify(context, "Wipe rejected: confirm code mismatch.", true)
             return
