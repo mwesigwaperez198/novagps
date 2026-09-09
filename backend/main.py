@@ -103,10 +103,18 @@ def startup_event() -> None:
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9_.:@-]{3,160}$")
 SQL_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,119}$")
 RATE_BUCKET: dict[str, list[datetime]] = {}
+GEOCODE_CACHE: dict[tuple[int, int], tuple[float, str | None]] = {}
+GEOCODE_CACHE_MAX = 5000
+GEOCODE_CACHE_TTL = 900.0
 logger = logging.getLogger("nova.main")
 
 
 def reverse_geocode(latitude: float, longitude: float) -> str | None:
+    cell = (int(latitude * 100), int(longitude * 100))
+    now = utcnow().timestamp()
+    hit = GEOCODE_CACHE.get(cell)
+    if hit and now - hit[0] < GEOCODE_CACHE_TTL:
+        return hit[1]
     try:
         resp = http_requests.get(
             "https://nominatim.openstreetmap.org/reverse",
@@ -118,6 +126,9 @@ def reverse_geocode(latitude: float, longitude: float) -> str | None:
         if resp.ok:
             name = resp.json().get("display_name")
             logger.info("geocode result=%s", name)
+            if len(GEOCODE_CACHE) >= GEOCODE_CACHE_MAX:
+                GEOCODE_CACHE.clear()
+            GEOCODE_CACHE[cell] = (now, name)
             return name
     except Exception as exc:
         logger.warning("geocode failed: %s", exc)

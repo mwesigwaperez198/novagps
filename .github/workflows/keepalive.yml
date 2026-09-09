@@ -1,0 +1,21 @@
+name: Keep Nova GPS awake
+
+on:
+  schedule:
+    # Render's free/starter instances sleep after ~15 min idle; an external
+    # ping every 5 minutes keeps the service (and the dashboard it serves)
+    # warm so Traccar phones and the UI never hit a 30-90 s cold start.
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hit health endpoint
+        run: |
+          curl -sS --max-time 60 -o /dev/null -w "health=%{http_code} latency=%{time_total}s\n" \
+            https://novagps.onrender.com/health || true
