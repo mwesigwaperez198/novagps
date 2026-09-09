@@ -917,6 +917,152 @@ select {
   color: var(--muted) !important;
 }
 
+.status-warn {
+  color: var(--amber) !important;
+}
+
+.status-dim {
+  color: var(--steel) !important;
+}
+
+.log-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.log-stat-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 4px 9px;
+  border: 1px solid var(--line);
+  background: rgba(3, 19, 7, 0.7);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.log-stat-chip strong {
+  color: var(--cyan);
+  font-size: 13px;
+}
+
+.empty-row {
+  padding: 10px;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: center;
+}
+
+.vpn-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  margin-bottom: 8px;
+  border: 1px solid var(--line);
+}
+
+.vpn-banner-ok {
+  border-color: rgba(41, 224, 107, 0.6);
+  background: rgba(13, 38, 19, 0.5);
+}
+
+.vpn-banner-off {
+  border-color: rgba(224, 64, 64, 0.6);
+  background: rgba(38, 10, 10, 0.4);
+}
+
+.vpn-banner-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 1px;
+}
+
+.vpn-banner-ok .vpn-banner-title {
+  color: var(--line-hot);
+}
+
+.vpn-banner-off .vpn-banner-title {
+  color: #ff7a7a;
+}
+
+.vpn-key {
+  font-size: 10px;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vpn-config-box textarea {
+  width: 100%;
+  margin-top: 6px;
+  background: rgba(2, 12, 8, 0.9);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 11px;
+  padding: 8px;
+  resize: vertical;
+  min-height: 180px;
+}
+
+.obs-counts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.obs-count {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  background: rgba(3, 19, 7, 0.7);
+}
+
+.obs-count strong {
+  font-size: 18px;
+  color: var(--cyan);
+}
+
+.obs-count span {
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.5px;
+}
+
+.obs-ip-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.obs-ip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 6px;
+}
+
+.obs-ip-list code {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  background: rgba(2, 12, 8, 0.8);
+  font-size: 10px;
+}
+
 .refresh-btn {
   margin: 8px;
   font-size: 10px;

@@ -212,7 +212,7 @@ def scan_nikto(target: str) -> dict[str, Any]:
         return {"error": "target must be a domain or IP"}
     output = _run(["nikto", "-h", target, "-maxtime", "60s"], timeout=90)
     if output.startswith("ERROR:"):
-        return {"error": output}
+        return _nikto_lite(target)
     vulnerabilities = []
     info_items = []
     for line in output.splitlines():
@@ -231,18 +231,163 @@ def scan_nikto(target: str) -> dict[str, Any]:
     }
 
 
+_NIKTO_PATHS = [
+    "robots.txt", "sitemap.xml", "favicon.ico", "admin/", "login", "wp-login.php",
+    ".git/config", ".env", "backup.zip", "server-status", "phpinfo.php",
+    "README.md", "crossdomain.xml", "web.config",
+]
+_SQL_ERROR_PATTERNS = [
+    re.compile(r"you have an error in your sql syntax", re.I),
+    re.compile(r"warning:\s+mysql|mysqli_|pg_query|sqlite3\.|odbc_", re.I),
+    re.compile(r"unclosed quotation mark|sqlserver", re.I),
+    re.compile(r"ora-[0-9]{4,5}", re.I),
+    re.compile(r"sqlite_error|near \"", re.I),
+]
+
+
+def _web_fetch(url: str, timeout: int = 6) -> tuple[int, dict[str, str], str]:
+    request = urllib.request.Request(
+        url,
+        method="GET",
+        headers={"User-Agent": "nova-osint/1.0", "Accept": "*/*"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read(6000).decode("utf-8", errors="replace")
+            return response.status, {key.lower(): value for key, value in response.getheaders()}, body
+    except urllib.error.HTTPError as exc:
+        body = exc.read(6000).decode("utf-8", errors="replace")
+        return exc.code, {key.lower(): value for key, value in exc.headers.items()}, body
+    except (urllib.error.URLError, socket.timeout):
+        return 0, {}, ""
+
+
+def _nikto_lite(target: str) -> dict[str, Any]:
+    """Built-in web server scan (nikto-style) with zero external tools."""
+    scheme = "http"
+    url = f"{scheme}://{target}"
+    findings: list[str] = []
+    info: list[str] = []
+    status, headers, body = _web_fetch(url)
+    server = headers.get("server") or headers.get("x-powered-by") or ""
+    if server:
+        info.append(f"+ Server: {server}")
+    if "server" not in headers:
+        info.append("+ Server header: MISSING (misconfiguration)")
+    for header in ("strict-transport-security", "content-security-policy", "x-frame-options"):
+        if header not in headers:
+            findings.append(f"+ Missing security header: {header.upper()}")
+    if status == 0:
+        return {
+            "target": target,
+            "vulnerabilities": ["+ Host unreachable"],
+            "vuln_count": 1,
+            "info": info,
+            "raw": "NOVA FALLBACK nikto-lite — host did not respond",
+            "method": "builtin",
+        }
+    info.append(f"+ HTTP status {status}")
+    if "powered" in body.lower() and status == 404:
+        findings.append("+ Software error page leaked via 404 body")
+    for path in _NIKTO_PATHS:
+        path_status, path_headers, path_body = _web_fetch(f"{url}/{path}")
+        if path_status and path_status < 400:
+            if path in (".git/config", ".env", "backup.zip", "phpinfo.php", "web.config"):
+                findings.append(f"+ Exposed sensitive file: /{path} (HTTP {path_status})")
+            elif path == "robots.txt":
+                entries = [line.strip() for line in path_body.splitlines() if line.lower().startswith(("disallow", "allow", "sitemap"))]
+                info.append(f"+ robots.txt found: {', '.join(entries[:4]) or 'empty'}")
+            elif path == "server-status":
+                findings.append("+ server-status exposed (mod_status)")
+            elif path in ("admin/", "login", "wp-login.php"):
+                info.append(f"+ Login/admin endpoint exposed: /{path} (HTTP {path_status})")
+    for method in ("OPTIONS", "TRACE"):
+        request = urllib.request.Request(url, method=method,
+                                         headers={"User-Agent": "nova-osint/1.0"})
+        try:
+            with urllib.request.urlopen(request, timeout=4) as response:
+                if method == "TRACE" and "Content-Type: message/http" in str(response.getheaders()):
+                    findings.append("+ TRACE method enabled (cross-site tracing risk)")
+        except urllib.error.HTTPError:
+            continue
+        except (urllib.error.URLError, socket.timeout):
+            continue
+    tech_via_headers = [h for h in ("x-generator", "x-drupal-cache", "x-wordpress", "x-aspnet-version") if h in headers]
+    if tech_via_headers:
+        info.append(f"+ Framework headers: {', '.join(tech_via_headers)}")
+    return {
+        "target": target,
+        "vulnerabilities": findings,
+        "vuln_count": len(findings),
+        "info": info,
+        "raw": "\n".join(info + findings),
+        "method": "builtin",
+        "note": "nikto not installed - used built-in web scan",
+    }
+
+
 def scan_sqlmap(url: str) -> dict[str, Any]:
     if not url.lower().startswith(("http://", "https://")):
         return {"error": "url must start with http:// or https://"}
     output = _run(["sqlmap", "-u", url, "--batch", "--level=1", "--risk=1", "--threads=4"], timeout=120)
-    if output.startswith("ERROR:"):
-        return {"error": output}
-    injectable = "is vulnerable" in output.lower() or "injectable" in output.lower()
-    findings = []
-    for line in output.splitlines():
-        if "injectable" in line.lower() or "payload" in line.lower() or "parameter" in line.lower():
-            findings.append(line.strip())
-    return {"url": url, "injectable": injectable, "findings": findings, "raw": output[-4096:]}
+    if not output.startswith("ERROR:"):
+        injectable = "is vulnerable" in output.lower() or "injectable" in output.lower()
+        findings = []
+        for line in output.splitlines():
+            if "injectable" in line.lower() or "payload" in line.lower() or "parameter" in line.lower():
+                findings.append(line.strip())
+        return {"url": url, "injectable": injectable, "findings": findings, "raw": output[-4096:]}
+    return _sqlmap_lite(url)
+
+
+def _sqlmap_lite(url: str) -> dict[str, Any]:
+    """Built-in SQLi probe: fuzzes GET parameters with safe payloads and
+    looks for SQL engine error signatures in the response."""
+    from urllib.parse import urlencode, urlparse, parse_qs, urlunparse
+    parsed = urlparse(url)
+    params = parse_qs(parsed.query)
+    findings: list[str] = []
+    if not params:
+        return {
+            "url": url,
+            "injectable": False,
+            "findings": [],
+            "raw": "NOVA FALLBACK sqlmap-lite — no GET parameters to test",
+            "method": "builtin",
+            "note": "sqlmap not installed - used built-in probe",
+        }
+    probes = ["'", "\"", "1 AND 1=1", "1 AND 1=2"]
+    tested = 0
+    for param, values in params.items():
+        baseline_status, _, baseline_body = _web_fetch(url)
+        for probe in probes:
+            mutated = {key: vals[0] for key, vals in params.items()}
+            mutated[param] = f"{values[0]}{probe}"
+            probe_url = urlunparse(parsed._replace(query=urlencode(mutated)))
+            status, _, body = _web_fetch(probe_url)
+            tested += 1
+            if status == 0:
+                break
+            for pattern in _SQL_ERROR_PATTERNS:
+                if pattern.search(body):
+                    findings.append(
+                        f"parameter '{param}' → SQL error signature on probe {probe!r} "
+                        f"(http {status}; baseline http {baseline_status})"
+                    )
+                    break
+            if len(findings) >= 8:
+                break
+        if len(findings) >= 8:
+            break
+    return {
+        "url": url,
+        "injectable": len(findings) > 0,
+        "findings": findings,
+        "probes_tested": tested,
+        "raw": "\n".join(findings) or "No SQL error signatures observed",
+        "method": "builtin",
+        "note": "sqlmap not installed - used built-in probe",
+    }
 
 
 def scan_whatweb(url: str) -> dict[str, Any]:

@@ -35,6 +35,7 @@ from models import (
     DeviceType,
     ImportedUser,
     Location,
+    recovery_id_str,
     utcnow,
 )
 from schemas import (
@@ -230,6 +231,7 @@ def device_response(db: Session, device: Device) -> DeviceResponse:
             "mac_address": device.mac_address,
             "local_ip": device.local_ip,
             "carrier": device.carrier,
+            "recovery_id": device.recovery_id,
             "is_active": device.is_active,
             "is_lost_mode": getattr(device, "is_lost_mode", False),
             "created_at": device.created_at,
@@ -303,6 +305,7 @@ def ensure_device_for_identifier(
         identifier=identifier,
         device_type=DeviceType.other,
         is_active=True,
+        recovery_id=recovery_id_str(),
     )
     os_type = (raw_payload or {}).get("os_type") if isinstance((raw_payload or {}).get("os_type"), str) else None
     model = (raw_payload or {}).get("model") if isinstance((raw_payload or {}).get("model"), str) else None
@@ -396,6 +399,7 @@ def register_device(
         device_type=payload.device_type,
         ip_address=payload.ip_address,
         mac_address=payload.mac_address,
+        recovery_id=recovery_id_str(),
     )
     db.add(device)
     try:
@@ -788,6 +792,275 @@ def audit_logs(
     ]
 
 
+@app.get("/logs")
+def system_logs(
+    kind: str | None = Query(None, max_length=20),
+    severity: str | None = Query(None, max_length=20),
+    limit: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db),
+    _: Principal = Depends(require_roles("auditor", "admin")),
+) -> dict[str, Any]:
+    """Aggregated, analysis-ready system logs.
+
+    Joins alerts, audit actions, consent events, and vehicle recoveries into
+    one timestamped feed plus a stats summary (counts by source/severity and
+    the last 24h window) so the dashboard can analyse what the system saw.
+    """
+    entries: list[dict[str, Any]] = []
+
+    if not kind or kind == "alert":
+        query = db.query(Alert)
+        if severity:
+            query = query.filter(Alert.severity == severity)
+        for row in query.order_by(Alert.created_at.desc()).limit(limit).all():
+            entries.append({
+                "id": row.id,
+                "ts": row.created_at,
+                "kind": "alert",
+                "severity": row.severity,
+                "title": row.title,
+                "message": row.message,
+                "device_id": row.device_id,
+                "actor": None,
+                "acknowledged": row.acknowledged,
+                "meta": row.metadata_json,
+            })
+
+    if not kind or kind == "audit":
+        query = db.query(AuditLog)
+        if severity:
+            query = query.filter(AuditLog.role == severity)
+        for row in query.order_by(AuditLog.created_at.desc()).limit(limit).all():
+            entries.append({
+                "id": row.id,
+                "ts": row.created_at,
+                "kind": "audit",
+                "severity": "info",
+                "title": row.action,
+                "message": None,
+                "device_id": None,
+                "actor": row.actor,
+                "acknowledged": None,
+                "meta": row.metadata_json,
+            })
+
+    if not kind or kind == "consent":
+        from models import Consent as ConsentModel
+        for row in db.query(ConsentModel).order_by(ConsentModel.consented_at.desc()).limit(limit).all():
+            entries.append({
+                "id": row.id,
+                "ts": row.consented_at,
+                "kind": "consent",
+                "severity": "active" if row.status == ConsentStatus.active else "warn",
+                "title": f"consent {row.status.value} · {row.scope}",
+                "message": f"{row.user_email} via {row.source}",
+                "device_id": row.device_id,
+                "actor": row.user_email,
+                "acknowledged": None,
+                "meta": {"proof_hash": row.proof_hash},
+            })
+
+    if not kind or kind == "vehicle":
+        vehicle_recovery._ensure_tables(db)
+        rows = db.execute(text(
+            "SELECT id, device_id, status, started_at, reported_by FROM vehicle_recovery ORDER BY started_at DESC LIMIT :limit"
+        ), {"limit": limit}).fetchall()
+        for row in rows:
+            entries.append({
+                "id": row[0],
+                "ts": row[3],
+                "kind": "vehicle",
+                "severity": row[2] == "active" and "critical" or "info",
+                "title": f"recovery {row[2]}",
+                "message": f"device {row[1]} · reported by {row[4] or 'unknown'}",
+                "device_id": row[1],
+                "actor": row[4],
+                "acknowledged": None,
+                "meta": {},
+            })
+
+    entries.sort(key=lambda entry: entry["ts"], reverse=True)
+    entries = entries[:limit]
+
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    day_ago = now - timedelta(hours=24)
+    stats = {
+        "total": len(entries),
+        "by_kind": {},
+        "by_severity": {},
+        "last_24h": {
+            "alerts": db.query(Alert).filter(Alert.created_at >= day_ago).count(),
+            "audit": db.query(AuditLog).filter(AuditLog.created_at >= day_ago).count(),
+        },
+    }
+    for entry in entries:
+        stats["by_kind"][entry["kind"]] = stats["by_kind"].get(entry["kind"], 0) + 1
+        stats["by_severity"][entry["severity"]] = stats["by_severity"].get(entry["severity"], 0) + 1
+    return {"entries": entries, "stats": stats}
+
+
+@app.get("/observatory/summary")
+def observatory_summary(
+    db: Session = Depends(get_db),
+    _: Principal = Depends(require_roles("viewer", "operator", "admin")),
+) -> dict[str, Any]:
+    """The system observing itself + everything it has seen.
+
+    Rather than depending only on selected devices, this aggregates every
+    trace the platform has collected: known devices (from Traccar, manual
+    registration, the APK), every public/local IP seen, WiFi networks and
+    cameras reported by agents, and the subnets the system already peers
+    into. This powers an organised self-tracking panel.
+    """
+    devices = db.query(Device).order_by(Device.created_at.desc()).limit(500).all()
+    online_ids: set[str] = set()
+    recent_rows = db.execute(text(
+        "SELECT device_id, MAX(recorded_at) FROM locations GROUP BY device_id"
+    )).fetchall()
+    from datetime import timedelta
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=15)
+    for row in recent_rows:
+        try:
+            ts = row[1]
+            if isinstance(ts, str):
+                parsed = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            else:
+                parsed = ts
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            if parsed >= cutoff:
+                online_ids.add(row[0])
+        except Exception:
+            continue
+
+    public_ips: set[str] = set()
+    local_ips: set[str] = set()
+    carriers: set[str] = set()
+    device_rows: list[dict[str, Any]] = []
+    for device in devices:
+        latest = latest_location_dict(db, device.id)
+        public_ip = device.ip_address or (latest or {}).get("ip_address")
+        local_ip = device.local_ip or (latest or {}).get("local_ip")
+        if public_ip:
+            public_ips.add(str(public_ip))
+        if local_ip:
+            local_ips.add(str(local_ip))
+        if device.carrier:
+            carriers.add(device.carrier)
+        device_rows.append({
+            "id": device.id,
+            "identifier": device.identifier,
+            "name": device.name,
+            "device_type": device.device_type.value,
+            "imei": device.imei,
+            "model": device.model,
+            "ip_address": public_ip,
+            "local_ip": local_ip,
+            "carrier": device.carrier,
+            "online": device.id in online_ids,
+            "source": "manual" if not device.name.startswith("Auto-") else "traccar",
+            "recovery_id": device.recovery_id,
+            "last_seen": (latest or {}).get("recorded_at"),
+        })
+
+    ip_rows = db.execute(text(
+        "SELECT ip_address, recorded_at FROM locations WHERE ip_address IS NOT NULL AND ip_address != '' "
+        "ORDER BY recorded_at DESC LIMIT 500"
+    )).fetchall()
+    for row in ip_rows:
+        if isinstance(row[0], str) and row[0].count(".") == 3:
+            public_ips.add(row[0])
+
+    wifi_networks: dict[str, dict[str, Any]] = {}
+    cameras_seen: dict[str, dict[str, Any]] = {}
+    payload_rows = db.query(Location).order_by(Location.received_at.desc()).limit(300).all()
+    for location in payload_rows:
+        payload = location.raw_payload or {}
+        for key in ("wifi", "wifi_networks", "nearby_wifi", "networks"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                for network in value:
+                    if isinstance(network, dict):
+                        ssid = str(network.get("ssid") or network.get("name") or "hidden")
+                        bssid = str(network.get("bssid") or network.get("mac") or ssid)
+                        if ssid not in wifi_networks:
+                            wifi_networks[ssid] = {
+                                "ssid": ssid,
+                                "bssid": bssid,
+                                "channel": network.get("channel"),
+                                "encryption": network.get("encryption") or network.get("security") or "unknown",
+                                "strength": network.get("rssi") or network.get("power") or network.get("strength"),
+                                "first_seen": str(location.recorded_at),
+                            }
+            elif isinstance(value, dict):
+                for bssid, network in value.items():
+                    if isinstance(network, dict):
+                        ssid = str(network.get("ssid") or bssid)
+                        wifi_networks[ssid] = wifi_networks.get(ssid, {
+                            "ssid": ssid,
+                            "bssid": str(bssid),
+                            "channel": network.get("channel"),
+                            "encryption": network.get("security") or "unknown",
+                            "strength": network.get("rssi"),
+                            "first_seen": str(location.recorded_at),
+                        })
+        for key in ("cameras", "camera_hosts"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                for camera in value:
+                    if isinstance(camera, dict) and camera.get("ip"):
+                        ip = str(camera["ip"])
+                        cameras_seen[ip] = {
+                            "ip": ip,
+                            "port": camera.get("port"),
+                            "protocol": camera.get("protocol") or "unknown",
+                            "kind": camera.get("kind") or "camera",
+                            "first_seen": str(location.recorded_at),
+                        }
+                    elif isinstance(camera, str) and camera.startswith(("rtsp://", "http://")):
+                        cameras_seen[camera] = {"ip": camera, "first_seen": str(location.recorded_at)}
+
+    vehicle_recovery._ensure_tables(db)
+    linked_cameras = [row for row in db.execute(text(
+        "SELECT camera_ip FROM vehicle_camera_link WHERE active = 1")).fetchall()]
+    for row in linked_cameras:
+        cameras_seen.setdefault(str(row[0]), {"ip": str(row[0]), "port": 554, "protocol": "rtsp", "first_seen": None})
+
+    subnets: set[str] = set()
+    for ip in local_ips:
+        parts = ip.split(".")
+        if len(parts) == 4 and parts[0].isdigit():
+            subnets.add(f"{parts[0]}.{parts[1]}.{parts[2]}.0/24")
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "devices": {
+            "total": len(device_rows),
+            "online": sum(1 for d in device_rows if d["online"]),
+            "offline": sum(1 for d in device_rows if not d["online"]),
+            "sources": {
+                "traccar": sum(1 for d in device_rows if d["source"] == "traccar"),
+                "manual": sum(1 for d in device_rows if d["source"] == "manual"),
+            },
+            "rows": device_rows[:100],
+        },
+        "subnets": sorted(subnets),
+        "public_ips": sorted(public_ips),
+        "local_ips": sorted(local_ips),
+        "carriers": sorted(carriers),
+        "wifi_networks": list(wifi_networks.values())[:200],
+        "cameras_seen": list(cameras_seen.values())[:200],
+        "counts": {
+            "public_ips": len(public_ips),
+            "local_ips": len(local_ips),
+            "wifi": len(wifi_networks),
+            "cameras": len(cameras_seen),
+            "subnets": len(subnets),
+        },
+    }
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket) -> None:
     query = parse_qs(urlparse(str(websocket.url)).query)
@@ -1016,27 +1289,51 @@ def camera_record(
 
 @app.get("/vpn/status")
 def vpn_status(
+    db: Session = Depends(get_db),
     principal: Principal = Depends(require_roles("viewer", "operator", "admin")),
 ) -> dict:
-    return vpn.get_vpn_status()
+    result = vpn.get_full_vpn_status(db)
+    db.close()
+    return result
+
+
+@app.get("/vpn/config")
+def vpn_config(
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(require_roles("viewer", "operator", "admin")),
+) -> dict:
+    result = vpn.ensure_builtin_tunnel(db)
+    result["client_config"] = vpn.get_builtin_client_config(db)
+    db.close()
+    return result
 
 
 @app.post("/vpn/connect")
 def vpn_connect(
-    config_path: str = Query(..., max_length=200),
+    config_path: str = Query("", max_length=200),
     vpn_type: str = Query("wireguard", max_length=20),
+    db: Session = Depends(get_db),
     principal: Principal = Depends(require_roles("admin")),
 ) -> dict:
-    return vpn.connect_vpn(config_path, vpn_type)
+    if not config_path:
+        return vpn.builtin_connect(db)
+    result = vpn.connect_vpn(config_path, vpn_type)
+    db.close()
+    return result
 
 
 @app.post("/vpn/disconnect")
 def vpn_disconnect(
-    interface: str = Query(..., max_length=30),
+    interface: str = Query("builtin", max_length=30),
     vpn_type: str = Query("wireguard", max_length=20),
+    db: Session = Depends(get_db),
     principal: Principal = Depends(require_roles("admin")),
 ) -> dict:
-    return vpn.disconnect_vpn(interface, vpn_type)
+    if vpn_type == "builtin" or not interface:
+        return vpn.builtin_disconnect(db)
+    result = vpn.disconnect_vpn(interface, vpn_type)
+    db.close()
+    return result
 
 
 @app.get("/ids/status")
@@ -1652,6 +1949,19 @@ def vehicle_link_camera(
 ) -> dict:
     db = next(get_db())
     result = vehicle_recovery.link_camera(db, recovery_id, device_id, camera_ip, camera_port, stream_url)
+    db.close()
+    return result
+
+
+@app.get("/vehicle/recovery/{recovery_id}/assets")
+def vehicle_recovery_assets(
+    recovery_id: str,
+    principal: Principal = Depends(require_roles("viewer", "operator", "admin")),
+) -> dict:
+    db = next(get_db())
+    result = vehicle_recovery.recovery_assets(db, recovery_id)
+    create_audit(db, principal, "vehicle.recovery_assets", {"recovery_id": recovery_id})
+    db.commit()
     db.close()
     return result
 

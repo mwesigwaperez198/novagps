@@ -100,6 +100,7 @@ class DeviceResponse(BaseModel):
     mac_address: str | None = None
     local_ip: str | None = None
     carrier: str | None = None
+    recovery_id: str | None = None
     is_active: bool
     is_lost_mode: bool = False
     created_at: datetime

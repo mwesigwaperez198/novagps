@@ -28,6 +28,10 @@ def uuid_str() -> str:
     return str(uuid.uuid4())
 
 
+def recovery_id_str() -> str:
+    return uuid.uuid4().hex[:16].upper()
+
+
 class DeviceType(str, enum.Enum):
     vehicle = "vehicle"
     motorcycle = "motorcycle"
@@ -70,6 +74,7 @@ class Device(Base):
     carrier: Mapped[str | None] = mapped_column(String(128), nullable=True)
     fcm_token: Mapped[str | None] = mapped_column(String(512), nullable=True)
     mqtt_topic: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    recovery_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_lost_mode: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)

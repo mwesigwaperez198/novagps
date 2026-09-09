@@ -18,7 +18,9 @@ import GeofencePanel from "./components/GeofencePanel.jsx";
 import IDSPanel from "./components/IDSPanel.jsx";
 import LiveMap from "./components/LiveMap.jsx";
 import LoginScreen from "./components/LoginScreen.jsx";
+import LogsPanel from "./components/LogsPanel.jsx";
 import NearbyScanPanel from "./components/NearbyScanPanel.jsx";
+import ObservatoryPanel from "./components/ObservatoryPanel.jsx";
 import OSINTPanel from "./components/OSINTPanel.jsx";
 import RemotePanel from "./components/RemotePanel.jsx";
 import ScanPanel from "./components/ScanPanel.jsx";
@@ -54,6 +56,7 @@ const PANEL_TABS = [
   { id: "fingerprint", label: "FP" },
   { id: "discovery", label: "DISC" },
   { id: "net", label: "NET" },
+  { id: "observatory", label: "OBS" },
   { id: "wifi", label: "WIFI" },
   { id: "firmware", label: "FW" },
   { id: "vehicle", label: "VHC" },
@@ -64,12 +67,15 @@ const PANEL_TABS = [
   { id: "consent", label: "CONS" },
   { id: "analytics", label: "ANL" },
   { id: "audit", label: "AUD" },
+  { id: "logs", label: "LOG" },
 ];
 
 export default function App() {
   const [user, setUser] = useState(null);
   const [devices, setDevices] = useState([]);
-  const [selectedDeviceId, setSelectedDeviceId] = useState(null);
+  const [selectedDeviceId, setSelectedDeviceId] = useState(
+    () => localStorage.getItem("novagps_selected_device") || null,
+  );
   const [events, setEvents] = useState([]);
   const [status, setStatus] = useState("BOOT");
   const [viewMode, setViewMode] = useState("consumer");
@@ -92,6 +98,14 @@ export default function App() {
     }
   }, []);
 
+  useEffect(() => {
+    if (selectedDeviceId) {
+      localStorage.setItem("novagps_selected_device", selectedDeviceId);
+    } else {
+      localStorage.removeItem("novagps_selected_device");
+    }
+  }, [selectedDeviceId]);
+
   function addToast(message, type = "info") {
     const id = Date.now();
     setToasts((items) => [...items, { id, message, type }]);
@@ -104,9 +118,13 @@ export default function App() {
     try {
       const nextDevices = searchQuery ? await api.search(searchQuery) : await api.devices();
       setDevices(nextDevices);
-      if (!selectedDeviceId && nextDevices.length) {
-        setSelectedDeviceId(nextDevices[0].id);
-      }
+      const target =
+        selectedDeviceId && nextDevices.some((device) => device.id === selectedDeviceId)
+          ? selectedDeviceId
+          : nextDevices.length
+            ? nextDevices[0].id
+            : null;
+      setSelectedDeviceId(target);
     } catch (error) {
       addToast(`Failed to load devices: ${error.message}`, "error");
     }
@@ -186,8 +204,19 @@ export default function App() {
     if (!user) return;
     if (viewMode === "developer") return;
     const interval = setInterval(async () => {
-      if (!selectedDeviceId) return;
       try {
+        if (!searchQuery) {
+          const nextDevices = await api.devices();
+          setDevices((current) => {
+            const merged = new Map(current.map((device) => [device.id, device]));
+            for (const device of nextDevices) {
+              const existing = merged.get(device.id);
+              merged.set(device.id, { ...existing, ...device });
+            }
+            return [...merged.values()];
+          });
+        }
+        if (!selectedDeviceId) return;
         const locations = await api.locations(selectedDeviceId, 1);
         if (locations.length > 0) {
           const loc = locations[0];
@@ -204,7 +233,7 @@ export default function App() {
       }
     }, 5000);
     return () => clearInterval(interval);
-  }, [selectedDeviceId, viewMode, user]);
+  }, [selectedDeviceId, searchQuery, viewMode, user]);
 
   function handleLogout() {
     setAuthToken(null);
@@ -327,6 +356,7 @@ export default function App() {
             {activePanel === "remote" && <RemotePanel device={selectedDevice} />}
             {activePanel === "fingerprint" && <FingerprintPanel device={selectedDevice} />}
             {activePanel === "discovery" && <DiscoveryPanel device={selectedDevice} />}
+            {activePanel === "observatory" && <ObservatoryPanel />}
             {activePanel === "net" && <NearbyScanPanel device={selectedDevice} onResults={(data) => setNearby(data)} />}
             {activePanel === "wifi" && <WifiPanel />}
             {activePanel === "firmware" && <FirmwarePanel device={selectedDevice} />}
@@ -338,6 +368,7 @@ export default function App() {
             {activePanel === "consent" && <ConsentPanel device={selectedDevice} />}
             {activePanel === "analytics" && <AnalyticsPanel device={selectedDevice} />}
             {activePanel === "audit" && <AuditLogPanel />}
+            {activePanel === "logs" && <LogsPanel />}
           </div>
         </section>
       )}

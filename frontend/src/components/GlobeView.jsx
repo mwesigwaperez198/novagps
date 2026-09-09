@@ -1,9 +1,38 @@
 import { useEffect, useRef } from "react";
+import { api } from "../lib/api.js";
 
 const DEG = Math.PI / 180;
 const GRID_LON_STEP = 20;
 const GRID_LAT_STEP = 20;
 const TEXTURE_URL = "https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg";
+
+const PLACES = [
+  { label: "Kampala", lat: 0.3476, lon: 32.5825 },
+  { label: "Entebbe", lat: 0.0568, lon: 32.4745 },
+  { label: "Jinja", lat: 0.4390, lon: 33.2032 },
+  { label: "Mbarara", lat: -0.6072, lon: 30.6545 },
+  { label: "Gulu", lat: 2.7730, lon: 32.2860 },
+  { label: "Mbale", lat: 1.0784, lon: 34.1750 },
+  { label: "Nairobi", lat: -1.2921, lon: 36.8219 },
+  { label: "Kigali", lat: -1.9440, lon: 30.0619 },
+  { label: "Juba", lat: 4.8594, lon: 31.5780 },
+  { label: "Khartoum", lat: 15.5007, lon: 32.5599 },
+  { label: "Addis Ababa", lat: 9.0250, lon: 38.7469 },
+  { label: "Dar es Salaam", lat: -6.7924, lon: 39.2083 },
+  { label: "Kinshasa", lat: -4.4419, lon: 15.2663 },
+  { label: "Lagos", lat: 6.5244, lon: 3.3792 },
+  { label: "Dakar", lat: 14.7167, lon: -17.4677 },
+  { label: "Cairo", lat: 30.0444, lon: 31.2357 },
+  { label: "Johannesburg", lat: -26.2041, lon: 28.0473 },
+  { label: "Cape Town", lat: -33.9249, lon: 18.4241 },
+  { label: "London", lat: 51.5074, lon: -0.1278 },
+  { label: "Paris", lat: 48.8566, lon: 2.3522 },
+  { label: "Moscow", lat: 55.7558, lon: 37.6173 },
+  { label: "Istanbul", lat: 41.0082, lon: 28.9784 },
+  { label: "Dubai", lat: 25.2048, lon: 55.2708 },
+  { label: "New York", lat: 40.7128, lon: -74.0060 },
+  { label: "Tokyo", lat: 35.6762, lon: 139.6503 },
+];
 
 let earthTexture = null;
 let earthTexturePromise = null;
@@ -73,6 +102,30 @@ function traceLine(ctx, points, projectFn, close = false, style) {
   }
 }
 
+function traceSegments(ctx, points, projectFn, style) {
+  ctx.strokeStyle = style;
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  let pen = false;
+  for (let index = 1; index < points.length; index += 1) {
+    const a = projectFn(points[index - 1].lat, points[index - 1].lon);
+    const b = projectFn(points[index].lat, points[index].lon);
+    if (a.w > 0.02 && b.w > 0.02) {
+      if (!pen) {
+        ctx.beginPath();
+        ctx.moveTo(ctx.width_cx + a.u, ctx.height_cy - a.v);
+        pen = true;
+      } else {
+        ctx.moveTo(ctx.width_cx + a.u, ctx.height_cy - a.v);
+      }
+      ctx.lineTo(ctx.width_cx + b.u, ctx.height_cy - b.v);
+      ctx.stroke();
+    } else {
+      pen = false;
+    }
+  }
+}
+
 function drawTexturedSphere(ctx, tex, cx, cy, R, az) {
   const texW = tex.naturalWidth || tex.width;
   const texH = tex.naturalHeight || tex.height;
@@ -134,10 +187,14 @@ export default function GlobeView({ device, markers = [] }) {
     if (!canvas) return undefined;
     const ctx = canvas.getContext("2d");
     const state = stateRef.current;
-    const texBridge = { texture: null };
+    const texBridge = { texture: null, trail: [], fences: [] };
     loadEarthTexture().then((texture) => {
       texBridge.texture = texture;
     });
+    if (device?.id) {
+      api.locations(device.id, 80).then((items) => { texBridge.trail = items || []; }).catch(() => {});
+    }
+    api.geofences().then((data) => { texBridge.fences = (data && data.geofences) || []; }).catch(() => {});
     let raf = 0;
     let width = 0;
     let height = 0;
@@ -229,6 +286,61 @@ export default function GlobeView({ device, markers = [] }) {
       ctx.arc(cx, cy, R, 0, Math.PI * 2);
       ctx.strokeStyle = "rgba(64, 215, 255, 0.5)";
       ctx.stroke();
+
+      // Geofence footprints on the globe
+      texBridge.fences.forEach((fence) => {
+        const coords = (fence.coords || [])
+          .map((c) => ({ lat: Number(c.latitude), lon: Number(c.longitude) }))
+          .filter((c) => Number.isFinite(c.lat) && Number.isFinite(c.lon));
+        if (coords.length >= 3) {
+          const seen = coords.map((c) => projectFn(c.lat, c.lon));
+          if (seen.every((p) => p.w > 0.02)) {
+            ctx.save();
+            ctx.beginPath();
+            seen.forEach((p, i) => {
+              const x = cx + p.u;
+              const y = cy - p.v;
+              if (i === 0) ctx.moveTo(x, y);
+              else ctx.lineTo(x, y);
+            });
+            ctx.closePath();
+            ctx.strokeStyle = "rgba(64, 215, 255, 0.7)";
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            ctx.fillStyle = "rgba(64, 215, 255, 0.08)";
+            ctx.fill();
+            ctx.restore();
+          }
+        }
+      });
+
+      // Route trail so a moving device leaves a visible satellite path
+      if (texBridge.trail.length >= 2) {
+        const trace = texBridge.trail.map((loc) => ({
+          lat: Number(loc.latitude),
+          lon: Number(loc.longitude),
+        })).filter((c) => Number.isFinite(c.lat) && Number.isFinite(c.lon));
+        if (trace.length >= 2) {
+          traceSegments(ctx, trace, projectFn, "rgba(64, 215, 255, 0.55)");
+        }
+      }
+
+      // Place-name labels (world cities + Uganda towns)
+      PLACES.forEach((place) => {
+        const p = projectFn(place.lat, place.lon);
+        if (p.w <= 0) return;
+        const x = cx + p.u;
+        const y = cy - p.v;
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(x, y, 1.6, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(230, 211, 108, 0.85)";
+        ctx.fill();
+        ctx.restore();
+        ctx.fillStyle = "rgba(215, 255, 228, 0.55)";
+        ctx.font = "8px 'JetBrains Mono', monospace";
+        ctx.fillText(place.label, x + 4, y - 2);
+      });
 
       const live = (device && asNumber(device.latest_location?.latitude) !== null
         && asNumber(device.latest_location?.longitude) !== null)

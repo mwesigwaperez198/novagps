@@ -56,11 +56,19 @@ export const api = {
   tools: () => request("/diagnose/tools"),
   broadcast: (payload) => request("/broadcast", { method: "POST", body: JSON.stringify(payload) }),
   auditLogs: (limit = 100) => request(`/audit-logs?limit=${limit}`),
+  logs: (kind = null, severity = null, limit = 100) => {
+    const params = new URLSearchParams({ limit });
+    if (kind) params.set("kind", kind);
+    if (severity) params.set("severity", severity);
+    return request(`/logs?${params}`);
+  },
+  observatory: () => request("/observatory/summary"),
   cameraDiscover: (subnet) => request(`/camera/discover?subnet=${encodeURIComponent(subnet)}`),
   cameraScreenshot: (rtspUrl) => request(`/camera/screenshot?rtsp_url=${encodeURIComponent(rtspUrl)}`),
   cameraRecord: (rtspUrl, duration = 30) => request(`/camera/record?rtsp_url=${encodeURIComponent(rtspUrl)}&duration=${duration}`, { method: "POST" }),
   vpnStatus: () => request("/vpn/status"),
-  vpnConnect: (configPath, vpnType = "wireguard") => request(`/vpn/connect?config_path=${encodeURIComponent(configPath)}&vpn_type=${vpnType}`, { method: "POST" }),
+  vpnConfig: () => request("/vpn/config"),
+  vpnConnect: (configPath, vpnType = "wireguard") => request(`/vpn/connect?config_path=${encodeURIComponent(configPath || "")}&vpn_type=${vpnType}`, { method: "POST" }),
   vpnDisconnect: (iface, vpnType = "wireguard") => request(`/vpn/disconnect?interface=${encodeURIComponent(iface)}&vpn_type=${vpnType}`, { method: "POST" }),
   idsStatus: () => request("/ids/status"),
   idsAlerts: (limit = 50) => request(`/ids/alerts?limit=${limit}`),
@@ -136,6 +144,7 @@ export const api = {
   // Vehicle recovery
   vehicleReportStolen: (deviceId) => request(`/vehicle/stolen-report?device_id=${encodeURIComponent(deviceId)}`, { method: "POST" }),
   vehicleRecoveryStatus: (recoveryId) => request(`/vehicle/recovery/${encodeURIComponent(recoveryId)}`),
+  vehicleRecoveryAssets: (recoveryId) => request(`/vehicle/recovery/${encodeURIComponent(recoveryId)}/assets`),
   vehicleEndRecovery: (recoveryId) => request(`/vehicle/recovery/${encodeURIComponent(recoveryId)}/end`, { method: "POST" }),
   vehicleLinkCamera: (recoveryId, deviceId, cameraIp, cameraPort = 554, streamUrl = "") =>
     request(`/vehicle/recovery/${encodeURIComponent(recoveryId)}/link-camera?device_id=${encodeURIComponent(deviceId)}&camera_ip=${encodeURIComponent(cameraIp)}&camera_port=${cameraPort}&stream_url=${encodeURIComponent(streamUrl)}`, { method: "POST" }),

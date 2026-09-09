@@ -137,3 +137,77 @@ def list_active_recoveries(db: Session) -> list[dict[str, Any]]:
         {"recovery_id": r[0], "device_id": r[1], "started_at": str(r[2]), "alerts_sent": r[3]}
         for r in rows
     ]
+
+
+def recovery_assets(db: Session, recovery_id: str) -> dict[str, Any]:
+    """Pull everything needed to start a physical recovery mission.
+
+    Given a recovery id, returns the device identity + network addresses
+    (public/local/carrier), its last known location, and automatically
+    sweeps the device's subnet for nearby cameras (RTSP hosts). This lets
+    the recovery lookup trigger camera discovery + the device IP without
+    any extra manual steps.
+    """
+    _ensure_tables(db)
+    row = db.execute(text(
+        "SELECT device_id, status FROM vehicle_recovery WHERE id = :id"
+    ), {"id": recovery_id}).fetchone()
+    if not row:
+        return {"error": "Recovery session not found"}
+    device_id, status = row[0], row[1]
+    from models import Device, Location
+    device = db.get(Device, device_id)
+    if not device:
+        return {"recovery_id": recovery_id, "device_id": device_id, "status": status, "device": None}
+    last = (
+        db.query(Location)
+        .filter(Location.device_id == device_id)
+        .order_by(Location.recorded_at.desc())
+        .first()
+    )
+    subnet = None
+    local_ip = device.local_ip or (last.ip_address if last else None) or None
+    if local_ip and local_ip.count(".") == 3 and local_ip.split(".")[0].isdigit():
+        parts = local_ip.split(".")
+        subnet = f"{parts[0]}.{parts[1]}.{parts[2]}.0/24"
+    cameras: list[dict[str, Any]] = []
+    scan_note = ""
+    if subnet:
+        try:
+            from discovery import scan_network
+            result = scan_network(subnet)
+            hosts = result.get("hosts", [])
+            cameras = [
+                {"ip": h["ip"], "ports": h.get("ports", []), "kind": h.get("kind", "host"), "vendor": h.get("vendor", "")}
+                for h in hosts
+                if h.get("is_camera")
+            ]
+            scan_note = f"Auto camera sweep on {subnet} ({result.get('engine')})"
+        except Exception as exc:  # pragma: no cover - network sweep is best-effort
+            scan_note = f"Camera sweep unavailable: {exc}"
+    return {
+        "recovery_id": recovery_id,
+        "device_id": device_id,
+        "status": status,
+        "device": {
+            "name": device.name,
+            "identifier": device.identifier,
+            "model": device.model,
+            "manufacturer": device.manufacturer,
+            "imei": device.imei,
+            "recovery_id": device.recovery_id,
+            "ip_address": device.ip_address,
+            "local_ip": device.local_ip,
+            "carrier": device.carrier,
+            "last_location": {
+                "latitude": last.latitude,
+                "longitude": last.longitude,
+                "place_name": last.place_name,
+                "recorded_at": str(last.recorded_at),
+            } if last else None,
+        },
+        "subnet": subnet,
+        "cameras": cameras,
+        "camera_count": len(cameras),
+        "scan_note": scan_note,
+    }

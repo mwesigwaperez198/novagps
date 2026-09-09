@@ -44,6 +44,7 @@ def init_db() -> None:
         Base.metadata.create_all(bind=engine)
         _ensure_column("devices", "local_ip", "VARCHAR(45)")
         _ensure_column("devices", "carrier", "VARCHAR(128)")
+        _ensure_column("devices", "recovery_id", "VARCHAR(32)")
     return
 
 
