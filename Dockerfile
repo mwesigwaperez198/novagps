@@ -13,6 +13,7 @@ WORKDIR /app
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends gcc libpq-dev curl ca-certificates \
+        nmap whois dnsutils netcat-openbsd openssl iproute2 iputils-ping traceroute \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend/requirements.txt /app/requirements.txt

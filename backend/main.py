@@ -278,20 +278,23 @@ def ensure_device_for_identifier(
     identifier: str,
     source: str = "auto",
     raw_payload: dict[str, Any] | None = None,
+    force: bool = False,
 ) -> Device | None:
     """Return the device for an agent-facing identifier.
 
     Under AUTO_ENROLL the first contact with an unknown identifier provisions
     the device row plus an active consent automatically (self-registration), so
     no dashboard registration is needed. When auto-enroll is off this returns
-    None so the caller can keep the strict 404 behaviour.
+    None so the caller can keep the strict 404 behaviour — unless force=True,
+    which always provisions (used by the Traccar-compatible ingest path so any
+    Traccar client phone in is picked up regardless of the AUTO_ENROLL switch).
     """
     if not identifier or not IDENTIFIER_PATTERN.fullmatch(identifier):
         return None
     device = db.query(Device).filter(Device.identifier == identifier).first()
     if device:
         return device if device.is_active else None
-    if not settings.auto_enroll:
+    if not settings.auto_enroll and not force:
         return None
     device = Device(
         name=f"Auto-{identifier}",
@@ -623,6 +626,7 @@ def _parse_traccar_timestamp(raw: str) -> datetime | None:
 
 
 @app.api_route("/traccar", methods=["GET", "POST"], status_code=status.HTTP_202_ACCEPTED)
+@app.api_route("/traccar/", methods=["GET", "POST"], include_in_schema=False)
 def traccar_compatible_update(
     request: Request,
     id: str = Query(..., min_length=3, max_length=160),
@@ -660,6 +664,7 @@ def traccar_compatible_update(
             "battery": battery,
         },
     )
+    ensure_device_for_identifier(db, id, source="traccar", raw_payload=payload.raw_payload, force=True)
     return update_location(payload, request, db)
 
 

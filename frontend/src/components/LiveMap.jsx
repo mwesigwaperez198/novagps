@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { Activity } from "lucide-react";
+import { Activity, Globe2, Map as MapIcon, Radar } from "lucide-react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { api } from "../lib/api.js";
+import GlobeView from "./GlobeView.jsx";
 import { KAMPALA, getViewerLocation, relativeTime, reportViewerLocation, speedColor } from "../lib/live.js";
 
 function asNumber(value) {
@@ -60,7 +61,7 @@ function popupHtml(device, loc) {
   ].filter(Boolean).join("");
 }
 
-export default function LiveMap({ device }) {
+export default function LiveMap({ device, onScanNet, nearby }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const dataLayerRef = useRef(null);
@@ -69,8 +70,12 @@ export default function LiveMap({ device }) {
   const [simulating, setSimulating] = useState(false);
   const [simError, setSimError] = useState("");
   const [mapReady, setMapReady] = useState(false);
+  const [mode, setMode] = useState("map");
 
   const liveLocation = normalizeLocation(device?.latest_location);
+  const publicIp = device?.latest_location?.ip_address || device?.ip_address || "";
+  const localIp = device?.latest_location?.local_ip || device?.local_ip || "";
+  const cameraCount = (nearby?.hosts || []).filter((host) => host.is_camera).length;
 
   // ---- init map once ----
   useEffect(() => {
@@ -237,12 +242,43 @@ export default function LiveMap({ device }) {
 
   return (
     <section className="panel live-map-panel">
-      <div ref={containerRef} className="live-map" />
+      <div ref={containerRef} className="live-map" style={mode === "globe" ? { display: "none" } : {}} />
+      {mode === "globe" && <GlobeView device={device} />}
       <div className="map-topbar">
         <code className="map-coords">
           {liveLocation ? `${liveLocation.latitude.toFixed(6)}, ${liveLocation.longitude.toFixed(6)}`
             : "NO FIX — select a device"}
         </code>
+        {publicIp && <code className="map-ip public">{publicIp}</code>}
+        {localIp && <code className="map-ip local">{localIp}</code>}
+        <div className="map-dimension">
+          <button
+            className={`command-button ${mode === "map" ? "is-active" : ""}`}
+            onClick={() => setMode("map")}
+            title="2D street / satellite map"
+            type="button"
+          >
+            <MapIcon size={14} /> 2D
+          </button>
+          <button
+            className={`command-button ${mode === "globe" ? "is-active" : ""}`}
+            onClick={() => setMode("globe")}
+            title="3D globe view"
+            type="button"
+          >
+            <Globe2 size={14} /> 3D
+          </button>
+        </div>
+        {typeof onScanNet === "function" && (
+          <button
+            className={`command-button ${nearby ? "is-active" : ""}`}
+            onClick={onScanNet}
+            title="Scan the network this device is on for nearby hosts / cameras"
+            type="button"
+          >
+            <Radar size={14} /> SCAN NET{cameraCount ? ` (${cameraCount} CAM)` : ""}
+          </button>
+        )}
         <button
           className={`command-button ${simulating ? "is-busy" : ""}`}
           onClick={reportLocation}

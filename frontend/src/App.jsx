@@ -18,6 +18,7 @@ import GeofencePanel from "./components/GeofencePanel.jsx";
 import IDSPanel from "./components/IDSPanel.jsx";
 import LiveMap from "./components/LiveMap.jsx";
 import LoginScreen from "./components/LoginScreen.jsx";
+import NearbyScanPanel from "./components/NearbyScanPanel.jsx";
 import OSINTPanel from "./components/OSINTPanel.jsx";
 import RemotePanel from "./components/RemotePanel.jsx";
 import ScanPanel from "./components/ScanPanel.jsx";
@@ -52,6 +53,7 @@ const PANEL_TABS = [
   { id: "remote", label: "REM" },
   { id: "fingerprint", label: "FP" },
   { id: "discovery", label: "DISC" },
+  { id: "net", label: "NET" },
   { id: "wifi", label: "WIFI" },
   { id: "firmware", label: "FW" },
   { id: "vehicle", label: "VHC" },
@@ -75,6 +77,7 @@ export default function App() {
   const [toasts, setToasts] = useState([]);
   const [activePanel, setActivePanel] = useState("terminal");
   const [searchQuery, setSearchQuery] = useState("");
+  const [nearby, setNearby] = useState(null);
   const wsRef = useRef(null);
 
   const selectedDevice = useMemo(
@@ -197,7 +200,7 @@ export default function App() {
   }
 
   return (
-    <main className="nova-shell">
+    <main className={`nova-shell ${viewMode === "consumer" ? "nova-shell-consumer" : ""}`}>
       <header className="topbar">
         <div className="brand">NOVA GPS</div>
         <div className="search-bar">
@@ -259,44 +262,10 @@ export default function App() {
         ) : (
           <>
             <DeviceList devices={devices} selectedId={selectedDevice?.id} onSelect={setSelectedDeviceId} onRefresh={loadDevices} />
-            <LiveMap device={selectedDevice} />
+            <LiveMap device={selectedDevice} onScanNet={() => setActivePanel("net")} nearby={nearby} />
             <aside className="right-rail">
               <DeviceInsight device={selectedDevice} onSimulated={() => loadDevices()} />
-              <div className="panel-tabs">
-                {PANEL_TABS.map((tab) => (
-                  <button
-                    key={tab.id}
-                    className={`panel-tab ${activePanel === tab.id ? "is-active" : ""}`}
-                    onClick={() => setActivePanel(tab.id)}
-                    type="button"
-                  >
-                    {tab.label}
-                  </button>
-                ))}
-              </div>
-              <div className="panel-content">
-                {activePanel === "terminal" && <TerminalPanel />}
-                {activePanel === "scan" && <ScanPanel />}
-                {activePanel === "osint" && <OSINTPanel />}
-                {activePanel === "webscan" && <WebScanPanel />}
-                {activePanel === "camera" && <CameraPanel />}
-                {activePanel === "vpn" && <VPNPanel />}
-                {activePanel === "ids" && <IDSPanel />}
-                {activePanel === "forensics" && <ForensicsPanel />}
-                {activePanel === "remote" && <RemotePanel device={selectedDevice} />}
-                {activePanel === "fingerprint" && <FingerprintPanel device={selectedDevice} />}
-                {activePanel === "discovery" && <DiscoveryPanel />}
-                {activePanel === "wifi" && <WifiPanel />}
-                {activePanel === "firmware" && <FirmwarePanel device={selectedDevice} />}
-                {activePanel === "vehicle" && <VehicleRecoveryPanel device={selectedDevice} />}
-                {activePanel === "geofence" && <GeofencePanel />}
-                {activePanel === "alerts" && <AlertsPanel />}
-                {activePanel === "scheduler" && <SchedulerPanel />}
-                {activePanel === "webhooks" && <WebhookPanel />}
-                {activePanel === "consent" && <ConsentPanel device={selectedDevice} />}
-                {activePanel === "analytics" && <AnalyticsPanel device={selectedDevice} />}
-                {activePanel === "audit" && <AuditLogPanel />}
-              </div>
+              <AlertsLog events={events} />
               <BroadcastController onEvent={(event) => setEvents((items) => [event, ...items])} />
               <DeviceRegisterForm
                 onRegistered={(device) => {
@@ -312,7 +281,46 @@ export default function App() {
         )}
       </section>
 
-      {viewMode === "developer" && <AlertsLog events={events} />}
+      {viewMode === "developer" && (
+        <section className="tools-dock">
+          <div className="tools-tabs">
+            {PANEL_TABS.map((tab) => (
+              <button
+                key={tab.id}
+                className={`panel-tab ${activePanel === tab.id ? "is-active" : ""}`}
+                onClick={() => setActivePanel(tab.id)}
+                type="button"
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+          <div className="panel-content">
+            {activePanel === "terminal" && <TerminalPanel />}
+            {activePanel === "scan" && <ScanPanel device={selectedDevice} />}
+            {activePanel === "osint" && <OSINTPanel />}
+            {activePanel === "webscan" && <WebScanPanel />}
+            {activePanel === "camera" && <CameraPanel />}
+            {activePanel === "vpn" && <VPNPanel />}
+            {activePanel === "ids" && <IDSPanel />}
+            {activePanel === "forensics" && <ForensicsPanel />}
+            {activePanel === "remote" && <RemotePanel device={selectedDevice} />}
+            {activePanel === "fingerprint" && <FingerprintPanel device={selectedDevice} />}
+            {activePanel === "discovery" && <DiscoveryPanel />}
+            {activePanel === "net" && <NearbyScanPanel device={selectedDevice} onResults={(data) => setNearby(data)} />}
+            {activePanel === "wifi" && <WifiPanel />}
+            {activePanel === "firmware" && <FirmwarePanel device={selectedDevice} />}
+            {activePanel === "vehicle" && <VehicleRecoveryPanel device={selectedDevice} />}
+            {activePanel === "geofence" && <GeofencePanel />}
+            {activePanel === "alerts" && <AlertsPanel />}
+            {activePanel === "scheduler" && <SchedulerPanel />}
+            {activePanel === "webhooks" && <WebhookPanel />}
+            {activePanel === "consent" && <ConsentPanel device={selectedDevice} />}
+            {activePanel === "analytics" && <AnalyticsPanel device={selectedDevice} />}
+            {activePanel === "audit" && <AuditLogPanel />}
+          </div>
+        </section>
+      )}
 
       <div className="toast-container">
         {toasts.map((toast) => (

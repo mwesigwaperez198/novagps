@@ -135,5 +135,16 @@ def test_host_tool_missing_binary_returns_127(monkeypatch):
     from command_registry import execute_registered_command
 
     result = execute_registered_command("net.scan.topports", {"target": "127.0.0.1"}, "admin")
+    assert result["exit_code"] == 0
+    assert "NOVA FALLBACK tcp-connect" in result["output"]
+
+
+def test_host_tool_without_fallback_still_reports_missing(monkeypatch):
+    import shutil
+
+    monkeypatch.setattr(shutil, "which", lambda binary: None)
+    from command_registry import execute_registered_command
+
+    result = execute_registered_command("osint.subdomains", {"domain": "example.com"}, "admin")
     assert result["exit_code"] == 127
     assert "NOVA TOOL MISSING" in result["output"]

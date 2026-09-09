@@ -1,7 +1,13 @@
+import concurrent.futures
+import json
 import platform
 import re
 import shutil
+import socket
+import ssl
 import sys
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -77,6 +83,213 @@ def builtin_system_info(args: dict[str, str]) -> tuple[int, str]:
 BUILTINS: Mapping[str, Callable[[dict[str, str]], tuple[int, str]]] = MappingProxyType(
     {
         "system.info": builtin_system_info,
+    }
+)
+
+
+# ----------------------------------------------------------------------
+# Built-in fallbacks: real (pure-Python) implementations that keep a tool
+# usable when its host binary is not installed. They only run when the
+# binary is missing, so installed binaries still take priority.
+# ----------------------------------------------------------------------
+
+TOP_PORTS = (
+    21, 22, 23, 25, 53, 80, 110, 111, 135, 139, 143, 443, 445,
+    993, 995, 1723, 3306, 3389, 5900, 8000, 8080, 8443,
+)
+SERVICE_NAMES = {
+    21: "ftp", 22: "ssh", 23: "telnet", 25: "smtp", 53: "domain",
+    80: "http", 110: "pop3", 111: "rpcbind", 135: "msrpc", 139: "netbios-ssn",
+    143: "imap", 443: "https", 445: "microsoft-ds", 993: "imaps",
+    995: "pop3s", 1723: "pptp", 3306: "mysql", 3389: "ms-wbt-server",
+    5900: "vnc", 8000: "http-alt", 8080: "http-proxy", 8443: "https-alt",
+    554: "rtsp", 161: "snmp",
+}
+
+
+def _resolve_target(target: str) -> str:
+    try:
+        socket.inet_aton(target)
+        return target
+    except socket.error:
+        return socket.gethostbyname(target)
+
+
+def _probe_port(target: str, port: int, timeout: float = 0.6) -> bool:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+    try:
+        return sock.connect_ex((target, port)) == 0
+    except socket.error:
+        return False
+    finally:
+        sock.close()
+
+
+def fallback_scan_topports(args: dict[str, str]) -> tuple[int, str]:
+    target = _resolve_target(args["target"])
+    lines = ["NOVA FALLBACK tcp-connect", f"target={target}", "PORT\tSTATE\tSERVICE"]
+    open_ports = []
+
+    def probe(port: int) -> tuple[int, bool]:
+        return port, _probe_port(target, port)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
+        for port, is_open in pool.map(probe, TOP_PORTS):
+            if is_open:
+                open_ports.append(port)
+    open_ports.sort()
+    for port in open_ports:
+        lines.append(f"{port}/tcp\topen\t{SERVICE_NAMES.get(port, 'tcp')}")
+    lines.append(f"\n{len(open_ports)} open port(s) of {len(TOP_PORTS)} probed")
+    return 0, "\n".join(lines) + "\n"
+
+
+def _grab_banner(target: str, port: int, timeout: float = 1.0) -> str:
+    try:
+        if port == 443:
+            ctx = ssl.create_default_context()
+            with socket.create_connection((target, port), timeout=timeout) as raw:
+                with ctx.wrap_socket(raw, server_hostname=target) as tls:
+                    return tls.version() or "ssl"
+        with socket.create_connection((target, port), timeout=timeout) as sock:
+            sock.settimeout(timeout)
+            return sock.recv(200).decode("utf-8", errors="replace").strip()[:160]
+    except (socket.error, ssl.SSLError, ValueError):
+        return ""
+
+
+def fallback_scan_services(args: dict[str, str]) -> tuple[int, str]:
+    target = _resolve_target(args["target"])
+    probe_set = (22, 25, 80, 110, 143, 443, 3306, 3389, 554, 5900, 8080)
+    lines = ["NOVA FALLBACK service-detect", f"target={target}", "PORT\tSERVICE\tBANNER"]
+
+    def probe(port: int) -> tuple[int, str]:
+        if not _probe_port(target, port):
+            return port, ""
+        return port, _grab_banner(target, port)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+        results = {port: banner for port, banner in pool.map(probe, probe_set) if banner}
+    for port in sorted(results):
+        banner = results[port].replace("\n", "\\n")
+        lines.append(f"{port}/tcp\t{SERVICE_NAMES.get(port, 'tcp')}\t{banner[:80]}")
+    if not results:
+        lines.append("no services detected")
+    return 0, "\n".join(lines) + "\n"
+
+
+def fallback_reverse_dns(args: dict[str, str]) -> tuple[int, str]:
+    lines = ["NOVA FALLBACK dns", f"ip={args['ip']}"]
+    try:
+        host = socket.gethostbyaddr(args["ip"])[0]
+        lines.append(f"ptr={host}")
+    except (socket.herror, socket.gaierror):
+        lines.append("ptr=(no PTR record)")
+    return 0, "\n".join(lines) + "\n"
+
+
+def _http_headers_live(url: str, timeout: int = 12) -> tuple[int, list[str]]:
+    request = urllib.request.Request(
+        url, method="GET",
+        headers={"User-Agent": "nova-fallback/1.0", "Accept": "*/*"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.status, [f"{key}: {value}" for key, value in response.getheaders()]
+    except urllib.error.HTTPError as exc:
+        return exc.code, [f"{key}: {value}" for key, value in exc.headers.items()]
+
+
+def fallback_http_headers(args: dict[str, str]) -> tuple[int, str]:
+    url = args["url"]
+    status, headers = _http_headers_live(url)
+    lines = ["NOVA FALLBACK http-headers", f"url={url}", f"HTTP/1.1 {status}"]
+    lines.extend(headers)
+    return 0, "\n".join(lines) + "\n"
+
+
+def fallback_http_tech(args: dict[str, str]) -> tuple[int, str]:
+    url = args["url"]
+    status, headers = _http_headers_live(url)
+    combined = "\n".join(headers).lower()
+    hints: list[str] = ["apache", "nginx", "cloudflare", "wordpress", "drupal", "joomla",
+                        "express", "next.js", "react", "django", "rails", "iis", "caddy",
+                        "openresty", "gunicorn", "uvicorn"]
+    found = [hint for hint in hints if hint in combined]
+    lines = [
+        "NOVA FALLBACK http-tech",
+        f"url={url}",
+        f"HTTP/1.1 {status}",
+    ]
+    server = next((h.split(":", 1)[1].strip() for h in headers if h.lower().startswith("server:")), "")
+    if server:
+        lines.append(f"server={server}")
+    inferred = found or ["generic-web-server"]
+    lines.append(f"technologies={','.join(inferred)}")
+    return 0, "\n".join(lines) + "\n"
+
+
+def fallback_crypto_info(args: dict[str, str]) -> tuple[int, str]:
+    target = args["target"]
+    ctx = ssl.create_default_context()
+    lines = ["NOVA FALLBACK tls", f"target={target}:443"]
+    try:
+        with socket.create_connection((target, 443), timeout=8) as raw:
+            with ctx.wrap_socket(raw, server_hostname=target) as tls:
+                cert = tls.getpeercert()
+                cipher, proto, _ = tls.cipher()
+                lines.append(f"version={tls.version()}")
+                lines.append(f"protocol={proto}")
+                lines.append(f"cipher={cipher}")
+                subject = cert.get("subject", ())
+                issuer = cert.get("issuer", ())
+                cn = dict(subject).get("commonName", "?")
+                org = dict(subject).get("organizationName", "?")
+                lines.append(f"subject_cn={cn}")
+                lines.append(f"subject_org={org}")
+                lines.append(f"issuer_cn={dict(issuer).get('commonName', '?')}")
+                lines.append(f"not_after={cert.get('notAfter', '?')}")
+    except (socket.error, ssl.SSLError, ValueError) as exc:
+        lines.append(f"error={exc}")
+    return 0, "\n".join(lines) + "\n"
+
+
+def fallback_whois_domain(args: dict[str, str]) -> tuple[int, str]:
+    domain = args["domain"]
+    lines = ["NOVA FALLBACK rdap", f"domain={domain}"]
+    try:
+        request = urllib.request.Request(
+            f"https://rdap.org/domain/{domain}",
+            headers={"Accept": "application/rdap+json", "User-Agent": "nova-fallback/1.0"},
+        )
+        with urllib.request.urlopen(request, timeout=15) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        lines.append(f"handle={data.get('handle', '?')}")
+        lines.append(f"status={','.join(data.get('status', []))}")
+        lines.append(f"ldh_name={data.get('ldhName', '?')}")
+        for event in data.get("events", []):
+            lines.append(f"event={event.get('eventAction')}={event.get('eventDate', '')}")
+        for entity in data.get("entities", []):
+            if entity.get("roles"):
+                lines.append(f"role={','.join(entity['roles'])} vcard={entity.get('vcardArray', ['?', []])}")
+        nameservers = [n.get("ldhName", "") for n in data.get("nameservers", [])]
+        lines.append(f"nameservers={','.join(nameservers)}")
+    except (urllib.error.URLError, socket.timeout, ValueError) as exc:
+        lines.append(f"error=RDAP lookup failed: {exc}")
+    return 0, "\n".join(lines) + "\n"
+
+
+FALLBACKS: Mapping[str, Callable[[dict[str, str]], tuple[int, str]]] = MappingProxyType(
+    {
+        "net.scan.topports": fallback_scan_topports,
+        "net.scan.services": fallback_scan_services,
+        "net.dns.reverse": fallback_reverse_dns,
+        "osint.http.headers": fallback_http_headers,
+        "osint.http.tech": fallback_http_tech,
+        "web.server.headers": fallback_http_headers,
+        "crypto.info": fallback_crypto_info,
+        "osint.whois.domain": fallback_whois_domain,
     }
 )
 

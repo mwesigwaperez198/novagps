@@ -1,13 +1,22 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Radar } from "lucide-react";
 import { api } from "../lib/api.js";
 
-export default function ScanPanel() {
+export default function ScanPanel({ device }) {
   const [scanType, setScanType] = useState("topports");
   const [target, setTarget] = useState("");
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  const publicIp = device?.latest_location?.ip_address || device?.ip_address || "";
+  const localIp = device?.latest_location?.local_ip || device?.local_ip || "";
+
+  useEffect(() => {
+    if (!target && (localIp || publicIp)) {
+      setTarget(localIp || publicIp);
+    }
+    }, [localIp, publicIp]);
 
   const scans = [
     { id: "topports", label: "Top 20 Ports", tool: "net.scan.topports" },
@@ -52,6 +61,16 @@ export default function ScanPanel() {
             placeholder="IP or domain"
             onKeyDown={(e) => e.key === "Enter" && runScan()}
           />
+          {publicIp && (
+            <button className="btn-sm" type="button" onClick={() => setTarget(publicIp)} title="Use device public IP">
+              PUB
+            </button>
+          )}
+          {localIp && (
+            <button className="btn-sm" type="button" onClick={() => setTarget(localIp)} title="Use device local IP">
+              LOC
+            </button>
+          )}
           <button className="command-button" onClick={runScan} disabled={loading}>
             {loading ? "..." : "SCAN"}
           </button>

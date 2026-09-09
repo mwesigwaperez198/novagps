@@ -11,6 +11,7 @@ from typing import Mapping
 from config import get_settings
 from tool_registry import (
     BUILTINS,
+    FALLBACKS,
     TOOL_REGISTRY,
     ToolSpec,
     resolve_host_argv,
@@ -231,6 +232,11 @@ def execute_registered_command(command_id: str, args: dict[str, str], role: str)
                 exit_code, output = BUILTINS[spec.command_id](args)
             elif tool_available(spec):
                 exit_code, output = _host_output(spec, args)
+            elif spec.command_id in FALLBACKS:
+                try:
+                    exit_code, output = FALLBACKS[spec.command_id](args)
+                except Exception as exc:  # noqa: BLE001 - keep tool output clean on failure
+                    exit_code, output = 1, f"NOVA FALLBACK ERROR: {exc}\n"
             else:
                 exit_code, output = 127, f"NOVA TOOL MISSING: none of {', '.join(spec.host_binaries)} found on PATH\n"
         elif get_settings().sandbox_executor_mode == "docker":

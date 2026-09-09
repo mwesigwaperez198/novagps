@@ -1,6 +1,10 @@
+import json
 import logging
 import re
+import socket
 import subprocess
+import urllib.error
+import urllib.request
 from typing import Any
 
 logger = logging.getLogger("nova.osint")
@@ -30,7 +34,7 @@ def whois_lookup(domain: str) -> dict[str, Any]:
         return {"error": "invalid domain format"}
     output = _run(["whois", domain], timeout=15)
     if output.startswith("ERROR:"):
-        return {"error": output}
+        return _whois_via_rdap(domain)
     result: dict[str, Any] = {"domain": domain, "raw": output[:4096]}
     for line in output.splitlines():
         lower = line.lower().strip()
@@ -51,12 +55,47 @@ def whois_lookup(domain: str) -> dict[str, Any]:
     return result
 
 
+def _whois_via_rdap(domain: str) -> dict[str, Any]:
+    result: dict[str, Any] = {"domain": domain, "method": "rdap", "note": "whois not installed - used RDAP"}
+    try:
+        request = urllib.request.Request(
+            f"https://rdap.org/domain/{domain}",
+            headers={"Accept": "application/rdap+json", "User-Agent": "nova-osint/1.0"},
+        )
+        with urllib.request.urlopen(request, timeout=15) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        for event in data.get("events", []):
+            action = event.get("eventAction", "")
+            if action in ("registration", "expiration", "last changed"):
+                if action == "registration":
+                    result["created"] = event.get("eventDate")
+                elif action == "expiration":
+                    result["expires"] = event.get("eventDate")
+                else:
+                    result["changed"] = event.get("eventDate")
+        nameservers = [ns.get("ldhName", "") for ns in data.get("nameservers", [])]
+        if nameservers:
+            result["nameservers"] = nameservers
+        for entity in data.get("entities", []):
+            if "registrar" in entity.get("roles", []):
+                vcard = entity.get("vcardArray", [])
+                if len(vcard) > 1:
+                    for item in vcard[1]:
+                        if item and item[0] == "fn":
+                            result["registrar"] = item[3]
+        result["status"] = data.get("status", [])
+        result["raw"] = json.dumps(data)[:4096]
+    except Exception as exc:  # noqa: BLE001 - keep the caller resilient
+        result["error"] = f"RDAP lookup failed: {exc}"
+    return result
+
+
 def dns_bruteforce(domain: str) -> dict[str, Any]:
     if not DOMAIN_PATTERN.fullmatch(domain):
         return {"error": "invalid domain format"}
     output = _run(["nmap", "--script", "dns-brute", "--script-args", "dns-brute.threads=5", domain], timeout=60)
     if output.startswith("ERROR:"):
-        return {"error": output}
+        return _dns_bruteforce_socket(domain)
     subdomains = []
     for line in output.splitlines():
         if "dns-brute" in line and domain in line:
@@ -66,6 +105,31 @@ def dns_bruteforce(domain: str) -> dict[str, Any]:
                     subdomains.append(part.rstrip(","))
                     break
     return {"domain": domain, "subdomains": subdomains, "count": len(subdomains), "raw": output[-2048:]}
+
+
+_COMMON_SUBDOMAINS = (
+    "www", "mail", "webmail", "portal", "vpn", "api", "admin", "login", "dev",
+    "staging", "test", "shop", "blog", "ftp", "smtp", "mx", "docs", "support",
+    "status", "app", "assets", "cdn", "ns1", "ns2", "img", "static",
+)
+
+
+def _dns_bruteforce_socket(domain: str) -> dict[str, Any]:
+    found = []
+    for prefix in _COMMON_SUBDOMAINS:
+        candidate = f"{prefix}.{domain}"
+        try:
+            socket.gethostbyname(candidate)
+            found.append(candidate)
+        except socket.gaierror:
+            continue
+    return {
+        "domain": domain,
+        "subdomains": found,
+        "count": len(found),
+        "method": "dns-socket",
+        "note": "nmap not installed - used built-in DNS enumeration",
+    }
 
 
 def reverse_dns(ip: str) -> dict[str, Any]:
@@ -79,6 +143,12 @@ def reverse_dns(ip: str) -> dict[str, Any]:
             if "name =" in line.lower():
                 hostname = line.split("=", 1)[1].strip().rstrip(".")
                 break
+    if not hostname or "ERROR:" in output:
+        hostname = ""
+        try:
+            hostname = socket.gethostbyaddr(ip)[0]
+        except (socket.herror, socket.gaierror):
+            pass
     return {"ip": ip, "hostname": hostname or "no PTR record"}
 
 
@@ -87,7 +157,7 @@ def http_headers(url: str) -> dict[str, Any]:
         return {"error": "url must start with http:// or https://"}
     output = _run(["curl", "-sSI", "--max-time", "12", url], timeout=15)
     if output.startswith("ERROR:"):
-        return {"error": output}
+        return _http_headers_urllib(url)
     headers: dict[str, str] = {}
     security_headers = [
         "strict-transport-security", "x-content-type-options",
@@ -101,6 +171,40 @@ def http_headers(url: str) -> dict[str, Any]:
     missing = [h for h in security_headers if h not in headers]
     status = headers.get("status", "").split()[0] if "status" in headers else "unknown"
     return {"url": url, "headers": headers, "security_headers_missing": missing, "status_code": status}
+
+
+def _http_headers_urllib(url: str) -> dict[str, Any]:
+    request = urllib.request.Request(
+        url, method="GET",
+        headers={"User-Agent": "nova-osint/1.0", "Accept": "*/*"},
+    )
+    headers: dict[str, str] = {}
+    status_code = "unknown"
+    try:
+        with urllib.request.urlopen(request, timeout=12) as response:
+            status_code = str(response.status)
+            for key, value in response.getheaders():
+                headers[key.lower()] = value
+    except urllib.error.HTTPError as exc:
+        status_code = str(exc.code)
+        for key, value in exc.headers.items():
+            headers[key.lower()] = value
+    except (urllib.error.URLError, socket.timeout) as exc:
+        return {"url": url, "error": f"request failed: {exc}"}
+    security_headers = [
+        "strict-transport-security", "x-content-type-options",
+        "x-frame-options", "x-xss-protection", "content-security-policy",
+        "referrer-policy", "permissions-policy",
+    ]
+    missing = [h for h in security_headers if h not in headers]
+    return {
+        "url": url,
+        "headers": headers,
+        "security_headers_missing": missing,
+        "status_code": status_code,
+        "method": "urllib",
+        "note": "curl not installed - used built-in HTTP client",
+    }
 
 
 def scan_nikto(target: str) -> dict[str, Any]:
@@ -418,12 +522,23 @@ def email_lookup(email: str) -> dict[str, Any]:
 
 def run_tool_command(command_id: str, args: dict[str, str]) -> dict[str, Any]:
     import shutil
-    from tool_registry import TOOL_REGISTRY, resolve_host_argv
+    from tool_registry import FALLBACKS, TOOL_REGISTRY, resolve_host_argv
 
     spec = TOOL_REGISTRY.get(command_id)
     if not spec:
         return {"error": f"Unknown tool: {command_id}"}
     if not any(shutil.which(b) for b in spec.host_binaries):
+        if command_id in FALLBACKS:
+            try:
+                exit_code, output = FALLBACKS[command_id](args)
+            except Exception as exc:  # noqa: BLE001 - keep tool output clean on failure
+                exit_code, output = 1, f"NOVA FALLBACK ERROR: {exc}\n"
+            return {
+                "command_id": command_id,
+                "exit_code": exit_code,
+                "output": output,
+                "mode": "fallback",
+            }
         return {"error": f"Tool not installed: {command_id}", "binaries": list(spec.host_binaries)}
     try:
         argv = resolve_host_argv(spec, args)
