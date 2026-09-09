@@ -75,7 +75,7 @@ class ImportActivity : AppCompatActivity() {
         packageManager.setComponentEnabledSetting(
             launcher,
             PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
-            DevicePolicyManager.FLAG_OVERRIDE_EXEMPT_SIGNATURE,
+            0,
         )
     }
 
