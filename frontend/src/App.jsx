@@ -319,14 +319,14 @@ export default function App() {
             {activePanel === "terminal" && <TerminalPanel />}
             {activePanel === "scan" && <ScanPanel device={selectedDevice} />}
             {activePanel === "osint" && <OSINTPanel />}
-            {activePanel === "webscan" && <WebScanPanel />}
-            {activePanel === "camera" && <CameraPanel />}
+            {activePanel === "webscan" && <WebScanPanel device={selectedDevice} />}
+            {activePanel === "camera" && <CameraPanel device={selectedDevice} />}
             {activePanel === "vpn" && <VPNPanel />}
             {activePanel === "ids" && <IDSPanel />}
             {activePanel === "forensics" && <ForensicsPanel />}
             {activePanel === "remote" && <RemotePanel device={selectedDevice} />}
             {activePanel === "fingerprint" && <FingerprintPanel device={selectedDevice} />}
-            {activePanel === "discovery" && <DiscoveryPanel />}
+            {activePanel === "discovery" && <DiscoveryPanel device={selectedDevice} />}
             {activePanel === "net" && <NearbyScanPanel device={selectedDevice} onResults={(data) => setNearby(data)} />}
             {activePanel === "wifi" && <WifiPanel />}
             {activePanel === "firmware" && <FirmwarePanel device={selectedDevice} />}

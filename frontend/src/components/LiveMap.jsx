@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Activity, Globe2, Map as MapIcon, Radar } from "lucide-react";
+import { Activity, Globe2, Map as MapIcon, Maximize2, Minimize2, Radar, Satellite } from "lucide-react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { api } from "../lib/api.js";
@@ -65,12 +65,17 @@ export default function LiveMap({ device, onScanNet, nearby }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const dataLayerRef = useRef(null);
+  const layerRefs = useRef({});
   const [routeHistory, setRouteHistory] = useState([]);
   const [geofences, setGeofences] = useState([]);
   const [simulating, setSimulating] = useState(false);
   const [simError, setSimError] = useState("");
   const [mapReady, setMapReady] = useState(false);
   const [mode, setMode] = useState("map");
+  const [base, setBase] = useState("streets");
+  const [floating, setFloating] = useState(false);
+  const [win, setWin] = useState({ x: 60, y: 60, w: 660, h: 480 });
+  const dragRef = useRef(null);
 
   const liveLocation = normalizeLocation(device?.latest_location);
   const publicIp = device?.latest_location?.ip_address || device?.ip_address || "";
@@ -97,8 +102,8 @@ export default function LiveMap({ device, onScanNet, nearby }) {
       { maxZoom: 19, attribution: "Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics" },
     );
     streets.addTo(map);
+    layerRefs.current = { streets, satellite };
 
-    L.control.layers({ Streets: streets, Satellite: satellite }, {}, { collapsed: true }).addTo(map);
     L.control.scale({ imperial: false, metric: true }).addTo(map);
 
     const dataLayer = L.layerGroup().addTo(map);
@@ -109,8 +114,65 @@ export default function LiveMap({ device, onScanNet, nearby }) {
       map.remove();
       mapRef.current = null;
       dataLayerRef.current = null;
+      layerRefs.current = {};
     };
   }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    const layers = layerRefs.current;
+    if (!map || !layers.streets || !layers.satellite) return;
+    if (base === "satellite") {
+      map.removeLayer(layers.streets);
+      layers.satellite.addTo(map);
+    } else {
+      map.removeLayer(layers.satellite);
+      layers.streets.addTo(map);
+    }
+  }, [base]);
+
+  useEffect(() => {
+    mapRef.current?.invalidateSize();
+  }, [floating, win.w, win.h]);
+
+  function startDrag(event) {
+    dragRef.current = { startX: event.clientX, startY: event.clientY, x: win.x, y: win.y };
+  }
+
+  function moveDrag(event) {
+    if (!dragRef.current) return;
+    const dx = event.clientX - dragRef.current.startX;
+    const dy = event.clientY - dragRef.current.startY;
+    setWin((current) => ({
+      ...current,
+      x: dragRef.current.x + dx,
+      y: dragRef.current.y + dy,
+    }));
+  }
+
+  function endDrag() {
+    dragRef.current = null;
+  }
+
+  function startResize(event) {
+    const startW = win.w;
+    const startH = win.h;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    function onMove(move) {
+      setWin((current) => ({
+        ...current,
+        w: Math.max(360, startW + move.clientX - startX),
+        h: Math.max(260, startH + move.clientY - startY),
+      }));
+    }
+    function onUp() {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    }
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
 
   // ---- load data for the selected device ----
   useEffect(() => {
@@ -241,10 +303,33 @@ export default function LiveMap({ device, onScanNet, nearby }) {
   }
 
   return (
-    <section className="panel live-map-panel">
-      <div ref={containerRef} className="live-map" style={mode === "globe" ? { display: "none" } : {}} />
-      {mode === "globe" && <GlobeView device={device} />}
-      <div className="map-topbar">
+    <section
+      className={`panel live-map-panel ${floating ? "is-floating" : ""} ${mode === "globe" ? "is-globe" : ""}`}
+      style={floating ? { left: win.x, top: win.y, width: win.w, height: win.h } : undefined}
+    >
+      {floating && (
+        <div
+          className="map-pop-bar"
+          onPointerDown={startDrag}
+          onPointerMove={moveDrag}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
+        >
+          <span className="map-pop-title">NOVA MAP</span>
+          <button
+            className="map-pop-btn"
+            onClick={() => setFloating(false)}
+            title="Dock map back into the layout"
+            type="button"
+          >
+            <Minimize2 size={14} />
+          </button>
+        </div>
+      )}
+      <div className="map-stage">
+        <div ref={containerRef} className="live-map" style={mode === "globe" ? { display: "none" } : {}} />
+        {mode === "globe" && <GlobeView device={device} />}
+        <div className="map-topbar">
         <code className="map-coords">
           {liveLocation ? `${liveLocation.latitude.toFixed(6)}, ${liveLocation.longitude.toFixed(6)}`
             : "NO FIX — select a device"}
@@ -255,7 +340,7 @@ export default function LiveMap({ device, onScanNet, nearby }) {
           <button
             className={`command-button ${mode === "map" ? "is-active" : ""}`}
             onClick={() => setMode("map")}
-            title="2D street / satellite map"
+            title="2D map"
             type="button"
           >
             <MapIcon size={14} /> 2D
@@ -263,12 +348,42 @@ export default function LiveMap({ device, onScanNet, nearby }) {
           <button
             className={`command-button ${mode === "globe" ? "is-active" : ""}`}
             onClick={() => setMode("globe")}
-            title="3D globe view"
+            title="3D satellite globe"
             type="button"
           >
             <Globe2 size={14} /> 3D
           </button>
         </div>
+        {mode === "map" && (
+          <div className="map-dimension">
+            <button
+              className={`command-button ${base === "streets" ? "is-active" : ""}`}
+              onClick={() => setBase("streets")}
+              title="Street map tiles"
+              type="button"
+            >
+              <MapIcon size={13} /> STREET
+            </button>
+            <button
+              className={`command-button ${base === "satellite" ? "is-active" : ""}`}
+              onClick={() => setBase("satellite")}
+              title="High-resolution satellite imagery"
+              type="button"
+            >
+              <Satellite size={13} /> SAT
+            </button>
+          </div>
+        )}
+        {!floating && (
+          <button
+            className="command-button"
+            onClick={() => setFloating(true)}
+            title="Pop the map out into a draggable, resizable window"
+            type="button"
+          >
+            <Maximize2 size={14} />
+          </button>
+        )}
         {typeof onScanNet === "function" && (
           <button
             className={`command-button ${nearby ? "is-active" : ""}`}
@@ -288,7 +403,9 @@ export default function LiveMap({ device, onScanNet, nearby }) {
           <Activity size={14} /> {simulating ? "REPORTING…" : "REPORT MY LOCATION"}
         </button>
       </div>
+      {floating && <div className="map-resize-handle" onPointerDown={startResize} title="Resize map window" />}
       {simError && <div className="map-error">{simError}</div>}
+      </div>
     </section>
   );
 }

@@ -3,6 +3,25 @@ import { useEffect, useRef } from "react";
 const DEG = Math.PI / 180;
 const GRID_LON_STEP = 20;
 const GRID_LAT_STEP = 20;
+const TEXTURE_URL = "https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg";
+
+let earthTexture = null;
+let earthTexturePromise = null;
+
+function loadEarthTexture() {
+  if (earthTexturePromise) return earthTexturePromise;
+  earthTexturePromise = new Promise((resolve) => {
+    const image = new Image();
+    image.crossOrigin = "anonymous";
+    image.src = TEXTURE_URL;
+    image.onload = () => {
+      earthTexture = image;
+      resolve(image);
+    };
+    image.onerror = () => resolve(null);
+  });
+  return earthTexturePromise;
+}
 
 function asNumber(value) {
   const next = Number(value);
@@ -54,6 +73,49 @@ function traceLine(ctx, points, projectFn, close = false, style) {
   }
 }
 
+function drawTexturedSphere(ctx, tex, cx, cy, R, az) {
+  const texW = tex.naturalWidth || tex.width;
+  const texH = tex.naturalHeight || tex.height;
+  if (!texW || !texH) return false;
+  const srcW = texW / 2;
+  const frontLeftDeg = az - 90;
+  let sx = ((frontLeftDeg + 180) / 360) * texW;
+  const wrap = sx + srcW > texW;
+  const sx2 = sx + srcW - texW;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(cx, cy, R, 0, Math.PI * 2);
+  ctx.clip();
+
+  const rows = Math.max(24, Math.round(R * 2));
+  for (let index = 0; index <= rows; index += 1) {
+    const y0 = -R + (index / rows) * R * 2;
+    const lat = Math.asin(y0 / R);
+    const cosLat = Math.max(0.0015, Math.cos(lat));
+    const dstW = Math.max(1, R * 2 * cosLat);
+    const dstX = cx - dstW / 2;
+    const dstY = cy + y0;
+    const latY = Math.max(0, Math.min(texH - 1, (0.5 + lat / 180) * texH));
+    if (!wrap) {
+      ctx.drawImage(tex, sx, latY, srcW, 1, dstX, dstY, dstW, 1);
+    } else {
+      const head = texW - sx;
+      ctx.drawImage(tex, sx, latY, head, 1, dstX, dstY, (dstW * head) / srcW, 1);
+      ctx.drawImage(tex, 0, latY, sx2, 1, dstX + (dstW * head) / srcW, dstY, (dstW * sx2) / srcW, 1);
+    }
+  }
+
+  const light = ctx.createRadialGradient(cx - R * 0.5, cy - R * 0.45, R * 0.1, cx, cy, R);
+  light.addColorStop(0, "rgba(255,255,255,0.16)");
+  light.addColorStop(0.55, "rgba(0,0,0,0)");
+  light.addColorStop(1, "rgba(2,12,8,0.62)");
+  ctx.fillStyle = light;
+  ctx.fillRect(cx - R, cy - R, R * 2, R * 2);
+  ctx.restore();
+  return true;
+}
+
 export default function GlobeView({ device, markers = [] }) {
   const canvasRef = useRef(null);
   const stateRef = useRef({
@@ -72,6 +134,10 @@ export default function GlobeView({ device, markers = [] }) {
     if (!canvas) return undefined;
     const ctx = canvas.getContext("2d");
     const state = stateRef.current;
+    const texBridge = { texture: null };
+    loadEarthTexture().then((texture) => {
+      texBridge.texture = texture;
+    });
     let raf = 0;
     let width = 0;
     let height = 0;
@@ -84,7 +150,7 @@ export default function GlobeView({ device, markers = [] }) {
       canvas.width = Math.round(width * dpr);
       canvas.height = Math.round(height * dpr);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      state.targetRadius = Math.min(width, height) * 0.34;
+      state.targetRadius = Math.min(width, height) * 0.36;
     }
 
     resize();
@@ -96,7 +162,7 @@ export default function GlobeView({ device, markers = [] }) {
     function draw() {
       state.radius += (state.targetRadius - state.radius) * 0.08;
       if (state.spinning && !state.dragging) {
-        state.az += 0.12;
+        state.az += 0.1;
       }
       const radius = state.radius;
       const az = state.az;
@@ -113,34 +179,50 @@ export default function GlobeView({ device, markers = [] }) {
       const R = radius;
 
       const projectFn = (lat, lon) => project(lat, lon, az, alt, R);
-
-      const ocean = ctx.createRadialGradient(cx - R * 0.3, cy - R * 0.35, R * 0.2, cx, cy, R);
-      ocean.addColorStop(0, "#123a2a");
-      ocean.addColorStop(0.65, "#0a1f16");
-      ocean.addColorStop(1, "#04120c");
+      const glow = ctx.createRadialGradient(cx, cy, R * 0.85, cx, cy, R * 1.08);
+      glow.addColorStop(0, "rgba(64,215,255,0.0)");
+      glow.addColorStop(1, "rgba(64,215,255,0.12)");
       ctx.beginPath();
-      ctx.arc(cx, cy, R, 0, Math.PI * 2);
-      ctx.fillStyle = ocean;
+      ctx.arc(cx, cy, R * 1.06, 0, Math.PI * 2);
+      ctx.fillStyle = glow;
       ctx.fill();
 
-      for (let lon = -180; lon < 180; lon += GRID_LON_STEP) {
-        const line = [];
-        for (let lat = -90; lat <= 90; lat += 5) line.push({ lat, lon });
-        traceLine(ctx, line, projectFn, false, "rgba(64, 215, 255, 0.16)");
-      }
-      for (let lat = -90; lat <= 90; lat += GRID_LAT_STEP) {
-        if (lat === 0 || Math.abs(lat) === 90) continue;
-        const line = [];
-        const segments = 72;
-        for (let i = 0; i <= segments; i += 1) {
-          line.push({ lat, lon: -180 + (360 * i) / segments });
-        }
-        traceLine(ctx, line, projectFn, false, "rgba(64, 215, 255, 0.16)");
-      }
+      const textured = texBridge.texture
+        ? drawTexturedSphere(ctx, texBridge.texture, cx, cy, R, az)
+        : false;
 
-      const equator = [];
-      for (let i = 0; i <= 72; i += 1) equator.push({ lat: 0, lon: -180 + (360 * i) / 72 });
-      traceLine(ctx, equator, projectFn, false, "rgba(41, 224, 107, 0.28)");
+      if (!textured) {
+        const ocean = ctx.createRadialGradient(cx - R * 0.3, cy - R * 0.35, R * 0.2, cx, cy, R);
+        ocean.addColorStop(0, "#123a2a");
+        ocean.addColorStop(0.65, "#0a1f16");
+        ocean.addColorStop(1, "#04120c");
+        ctx.beginPath();
+        ctx.arc(cx, cy, R, 0, Math.PI * 2);
+        ctx.fillStyle = ocean;
+        ctx.fill();
+
+        for (let lon = -180; lon < 180; lon += GRID_LON_STEP) {
+          const line = [];
+          for (let lat = -90; lat <= 90; lat += 5) line.push({ lat, lon });
+          traceLine(ctx, line, projectFn, false, "rgba(64, 215, 255, 0.16)");
+        }
+        for (let lat = -90; lat <= 90; lat += GRID_LAT_STEP) {
+          if (lat === 0 || Math.abs(lat) === 90) continue;
+          const line = [];
+          const segments = 72;
+          for (let i = 0; i <= segments; i += 1) {
+            line.push({ lat, lon: -180 + (360 * i) / segments });
+          }
+          traceLine(ctx, line, projectFn, false, "rgba(64, 215, 255, 0.16)");
+        }
+        const equator = [];
+        for (let i = 0; i <= 72; i += 1) equator.push({ lat: 0, lon: -180 + (360 * i) / 72 });
+        traceLine(ctx, equator, projectFn, false, "rgba(41, 224, 107, 0.28)");
+      } else {
+        const equator = [];
+        for (let i = 0; i <= 72; i += 1) equator.push({ lat: 0, lon: -180 + (360 * i) / 72 });
+        traceLine(ctx, equator, projectFn, false, "rgba(41, 224, 107, 0.14)");
+      }
 
       ctx.lineWidth = 1;
       ctx.beginPath();

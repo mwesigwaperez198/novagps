@@ -1,21 +1,39 @@
-import { useState } from "react";
-import { Camera, Wifi, Video } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Camera, Crosshair, Wifi, Video } from "lucide-react";
 import { api } from "../lib/api.js";
+import { deviceContext } from "../lib/device.js";
 
-export default function CameraPanel() {
+export default function CameraPanel({ device }) {
+  const ctx = deviceContext(device);
   const [cameras, setCameras] = useState([]);
-  const [subnet, setSubnet] = useState("192.168.1.0/24");
+  const [subnet, setSubnet] = useState(ctx.subnet || "192.168.1.0/24");
   const [scanning, setScanning] = useState(false);
   const [screenshotUrl, setScreenshotUrl] = useState("");
   const [screenshotResult, setScreenshotResult] = useState(null);
   const [recordUrl, setRecordUrl] = useState("");
   const [duration, setDuration] = useState(30);
   const [recordResult, setRecordResult] = useState(null);
+  const autoRan = useRef(false);
 
-  async function discover() {
+  useEffect(() => {
+    if (ctx.ip) {
+      setScreenshotUrl(`rtsp://${ctx.ip}:554/live`);
+      setRecordUrl(`rtsp://${ctx.ip}:554/live`);
+    }
+    if (ctx.subnet) setSubnet(ctx.subnet);
+    if (ctx.subnet && ctx.ip && !autoRan.current) {
+      autoRan.current = true;
+      discover(ctx.subnet);
+    }
+  }, [ctx.ip, ctx.subnet]);
+
+  async function discover(targetSubnet) {
+    const target = targetSubnet || subnet;
+    if (!target) return;
     setScanning(true);
+    setCameras([]);
     try {
-      const result = await api.cameraDiscover(subnet);
+      const result = await api.cameraDiscover(target);
       setCameras(result.cameras || []);
     } catch (err) {
       setCameras([{ error: err.message }]);
@@ -51,6 +69,15 @@ export default function CameraPanel() {
         <span>CAMERA</span>
         <Camera size={15} />
       </div>
+      {device?.id && (
+        <div className="tool-device-context">
+          <Crosshair size={12} />
+          {device.identifier}
+          {ctx.imei ? ` · IMEI ${ctx.imei}` : ""}
+          {ctx.ip ? ` · ${ctx.ip}` : ""}
+        </div>
+      )}
+      {!device?.id && <div className="inline-error">No connected device — pick one from the device list first.</div>}
       <div className="tool-controls">
         <div className="target-row">
           <input
@@ -58,7 +85,7 @@ export default function CameraPanel() {
             onChange={(e) => setSubnet(e.target.value)}
             placeholder="192.168.1.0/24"
           />
-          <button className="command-button" onClick={discover} disabled={scanning}>
+          <button className="command-button" onClick={() => discover()} disabled={scanning}>
             {scanning ? "..." : "DISCOVER"}
           </button>
         </div>
@@ -73,6 +100,11 @@ export default function CameraPanel() {
             )}
           </div>
         ))}
+        {!scanning && cameras.length === 0 && (
+          <div className="camera-item empty-row">
+            <Wifi size={13} /> No cameras on this subnet yet.
+          </div>
+        )}
       </div>
       <div className="tool-controls">
         <div className="target-row">

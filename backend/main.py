@@ -313,6 +313,9 @@ def ensure_device_for_identifier(
         device.model = model[:160]
     if manufacturer:
         device.manufacturer = manufacturer[:160]
+    imei_value = (raw_payload or {}).get("imei")
+    if isinstance(imei_value, str) and imei_value.strip():
+        device.imei = imei_value.strip()[:32]
     db.add(device)
     db.flush()
     db.add(
@@ -540,6 +543,9 @@ def update_location(
     )
     device.ip_address = ip_address
     _apply_network_context(device, payload.raw_payload)
+    captured_imei = (payload.raw_payload or {}).get("imei")
+    if isinstance(captured_imei, str) and captured_imei.strip() and not device.imei:
+        device.imei = captured_imei.strip()[:32]
     db.add(location)
     create_audit(db, principal, "location.ingest", {"device_id": device.id, "source": payload.source})
     db.commit()
@@ -640,6 +646,7 @@ def traccar_compatible_update(
     timestamp: str | None = Query(None, max_length=40),
     hdop: float | None = Query(None, ge=0),
     battery: float | None = Query(None, ge=0),
+    imei: str | None = Query(None, max_length=32),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     payload = LocationUpdateRequest(
@@ -663,6 +670,7 @@ def traccar_compatible_update(
             "timestamp": timestamp,
             "hdop": hdop,
             "battery": battery,
+            "imei": imei,
         },
     )
     ensure_device_for_identifier(db, id, source="traccar", raw_payload=payload.raw_payload, force=True)

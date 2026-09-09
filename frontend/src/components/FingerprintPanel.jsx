@@ -1,13 +1,19 @@
-import { useState } from "react";
-import { Fingerprint, Search, Shield, Loader2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Fingerprint, Search, Shield, Loader2, Crosshair } from "lucide-react";
 import { api } from "../lib/api.js";
+import { deviceContext } from "../lib/device.js";
 
 export default function FingerprintPanel({ device }) {
+  const ctx = deviceContext(device);
   const [ip, setIp] = useState("");
   const [result, setResult] = useState(null);
   const [ouiResult, setOuiResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+
+  useEffect(() => {
+    if (ctx.ip) setIp(ctx.ip);
+  }, [ctx.ip]);
 
   async function runFingerprint(targetIp) {
     const useIp = targetIp || ip || device?.ip_address;
@@ -34,6 +40,15 @@ export default function FingerprintPanel({ device }) {
     <div className="panel-inner">
       <h3><Fingerprint size={14} /> Device Fingerprinting</h3>
       <p className="muted">OS fingerprint via TCP/IP stack analysis &amp; MAC vendor lookup</p>
+
+      {device?.id && (
+        <div className="tool-device-context">
+          <Crosshair size={12} />
+          {device.identifier}
+          {ctx.imei ? ` · IMEI ${ctx.imei}` : ""}
+          {ctx.ip ? ` · ${ctx.ip}` : ""}
+        </div>
+      )}
 
       <div className="input-row">
         <input value={ip} onChange={(e) => setIp(e.target.value)} placeholder="IP (uses device IP if empty)" />

@@ -1,22 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Camera, PlugZap, Radar, RefreshCw } from "lucide-react";
 import { api } from "../lib/api.js";
-
-function ipToSubnet(ip) {
-  if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(ip || "")) return null;
-  const parts = ip.split(".");
-  return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
-}
-
-function deviceIp(device) {
-  return (
-    device?.local_ip ||
-    device?.latest_location?.local_ip ||
-    device?.ip_address ||
-    device?.latest_location?.ip_address ||
-    ""
-  );
-}
+import { deviceIp, subnetFromIp } from "../lib/device.js";
 
 const CAM_SERVICES = { 554: "RTSP", 8080: "UI", 80: "HTTP", 443: "HTTPS" };
 
@@ -53,7 +38,7 @@ export default function NearbyScanPanel({ device, onResults }) {
 
   useEffect(() => {
     const ip = deviceIp(device);
-    const derived = ipToSubnet(ip);
+    const derived = subnetFromIp(ip);
     if (!derived) return undefined;
     if (lastScanned.current === derived) return undefined;
     const timer = setTimeout(() => runScan(derived, true), 900);

@@ -1,22 +1,16 @@
-import { useEffect, useState } from "react";
-import { Radar } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Crosshair, Radar } from "lucide-react";
 import { api } from "../lib/api.js";
+import { deviceContext } from "../lib/device.js";
 
 export default function ScanPanel({ device }) {
+  const ctx = deviceContext(device);
   const [scanType, setScanType] = useState("topports");
   const [target, setTarget] = useState("");
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-
-  const publicIp = device?.latest_location?.ip_address || device?.ip_address || "";
-  const localIp = device?.latest_location?.local_ip || device?.local_ip || "";
-
-  useEffect(() => {
-    if (!target && (localIp || publicIp)) {
-      setTarget(localIp || publicIp);
-    }
-    }, [localIp, publicIp]);
+  const autoRan = useRef(false);
 
   const scans = [
     { id: "topports", label: "Top 20 Ports", tool: "net.scan.topports" },
@@ -26,14 +20,24 @@ export default function ScanPanel({ device }) {
     { id: "masscan", label: "Masscan (Fast)", tool: "net.scan.masscan" },
   ];
 
-  async function runScan() {
-    if (!target.trim()) return;
+  useEffect(() => {
+    if (!target && ctx.ip) {
+      setTarget(ctx.ip);
+      if (!autoRan.current) {
+        autoRan.current = true;
+        runScan(ctx.ip);
+      }
+    }
+  }, [ctx.ip, target]);
+
+  async function runScan(forceTarget) {
+    if (!forceTarget && !target.trim()) return;
     setLoading(true);
     setError("");
     setResult(null);
     try {
       const scan = scans.find((s) => s.id === scanType);
-      const data = await api.diagnose({ command_id: scan.tool, args: { target } });
+      const data = await api.diagnose({ command_id: scan.tool, args: { target: forceTarget || target } });
       setResult(data);
     } catch (err) {
       setError(err.message);
@@ -48,6 +52,14 @@ export default function ScanPanel({ device }) {
         <span>PORT_SCAN</span>
         <Radar size={15} />
       </div>
+      {device?.id && (
+        <div className="tool-device-context">
+          <Crosshair size={12} />
+          {device.identifier}
+          {ctx.imei ? ` · IMEI ${ctx.imei}` : ""}
+          {ctx.ip ? ` · ${ctx.ip}` : ""}
+        </div>
+      )}
       <div className="tool-controls">
         <select value={scanType} onChange={(e) => setScanType(e.target.value)}>
           {scans.map((s) => (
@@ -61,13 +73,13 @@ export default function ScanPanel({ device }) {
             placeholder="IP or domain"
             onKeyDown={(e) => e.key === "Enter" && runScan()}
           />
-          {publicIp && (
-            <button className="btn-sm" type="button" onClick={() => setTarget(publicIp)} title="Use device public IP">
+          {ctx.publicIp && (
+            <button className="btn-sm" type="button" onClick={() => setTarget(ctx.publicIp)} title="Use device public IP">
               PUB
             </button>
           )}
-          {localIp && (
-            <button className="btn-sm" type="button" onClick={() => setTarget(localIp)} title="Use device local IP">
+          {ctx.localIp && (
+            <button className="btn-sm" type="button" onClick={() => setTarget(ctx.localIp)} title="Use device local IP">
               LOC
             </button>
           )}

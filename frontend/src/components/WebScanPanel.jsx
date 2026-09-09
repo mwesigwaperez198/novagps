@@ -1,13 +1,16 @@
-import { useState } from "react";
-import { Globe } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Crosshair, Globe } from "lucide-react";
 import { api } from "../lib/api.js";
+import { deviceContext } from "../lib/device.js";
 
-export default function WebScanPanel() {
+export default function WebScanPanel({ device }) {
+  const ctx = deviceContext(device);
   const [scanType, setScanType] = useState("headers");
   const [target, setTarget] = useState("");
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const autoRan = useRef(false);
 
   const scans = [
     { id: "headers", label: "Security Headers", fn: (t) => api.osintHttpHeaders(t) },
@@ -15,14 +18,25 @@ export default function WebScanPanel() {
     { id: "sqlmap", label: "SQL Injection", fn: (t) => api.osintSqlmap(t) },
   ];
 
-  async function runScan() {
-    if (!target.trim()) return;
+  useEffect(() => {
+    if (!ctx.ip) return;
+    const derived = ctx.publicIp || ctx.ip;
+    setTarget(`http://${derived}`);
+    if (!autoRan.current) {
+      autoRan.current = true;
+      runScan(`http://${derived}`);
+    }
+  }, [ctx.ip, ctx.publicIp]);
+
+  async function runScan(forceTarget) {
+    const useTarget = forceTarget || target;
+    if (!useTarget.trim()) return;
     setLoading(true);
     setError("");
     setResult(null);
     try {
       const scan = scans.find((s) => s.id === scanType);
-      const data = await scan.fn(target);
+      const data = await scan.fn(useTarget);
       setResult(data);
     } catch (err) {
       setError(err.message);
@@ -37,6 +51,15 @@ export default function WebScanPanel() {
         <span>WEB_SCAN</span>
         <Globe size={15} />
       </div>
+      {device?.id && (
+        <div className="tool-device-context">
+          <Crosshair size={12} />
+          {device.identifier}
+          {ctx.imei ? ` · IMEI ${ctx.imei}` : ""}
+          {ctx.ip ? ` · ${ctx.ip}` : ""}
+        </div>
+      )}
+      {!device?.id && <div className="inline-error">No connected device — pick one from the device list first.</div>}
       <div className="tool-controls">
         <select value={scanType} onChange={(e) => setScanType(e.target.value)}>
           {scans.map((s) => (
@@ -50,7 +73,7 @@ export default function WebScanPanel() {
             placeholder="https://target.com"
             onKeyDown={(e) => e.key === "Enter" && runScan()}
           />
-          <button className="command-button" onClick={runScan} disabled={loading}>
+          <button className="command-button" onClick={() => runScan()} disabled={loading}>
             {loading ? "..." : "ANALYZE"}
           </button>
         </div>

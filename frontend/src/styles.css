@@ -1745,6 +1745,86 @@ select {
   font-family: inherit;
 }
 
+.map-stage {
+  position: absolute;
+  inset: 0;
+}
+
+.live-map-panel.is-floating {
+  position: fixed;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.65);
+}
+
+.live-map-panel.is-floating > .map-stage {
+  position: relative;
+  inset: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.map-pop-bar {
+  flex: 0 0 30px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 8px;
+  background: #06110b;
+  border-bottom: 1px solid #123a2a;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.map-pop-title {
+  font-size: 11px;
+  letter-spacing: 2px;
+  color: var(--line-hot);
+}
+
+.map-pop-btn {
+  background: none;
+  border: 1px solid var(--line);
+  color: var(--steel);
+  padding: 2px 6px;
+  cursor: pointer;
+}
+
+.map-pop-btn:hover {
+  color: var(--cyan);
+  border-color: var(--cyan);
+}
+
+.map-resize-handle {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 18px;
+  height: 18px;
+  z-index: 800;
+  cursor: nwse-resize;
+  background: linear-gradient(135deg, transparent 0 46%, rgba(64, 215, 255, 0.9) 46% 54%, transparent 54%);
+}
+
+.tool-device-context {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0;
+  padding: 5px 8px;
+  border: 1px dashed rgba(64, 215, 255, 0.4);
+  background: rgba(3, 19, 7, 0.7);
+  color: var(--cyan);
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .leaflet-popup-content-wrapper,
 .leaflet-popup-tip {
   background: rgba(4, 16, 11, 0.96);

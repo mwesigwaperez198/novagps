@@ -1,11 +1,13 @@
-import { useState } from "react";
-import { Camera, Network, PlugZap, RefreshCw, Search, Usb } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Camera, Crosshair, Network, PlugZap, RefreshCw, Search, Usb } from "lucide-react";
 import { api } from "../lib/api.js";
+import { deviceContext } from "../lib/device.js";
 
 const CAM_SERVICES = { 554: "RTSP", 8080: "UI", 80: "HTTP", 443: "HTTPS" };
 
-export default function DiscoveryPanel() {
-  const [subnet, setSubnet] = useState("192.168.1.0/24");
+export default function DiscoveryPanel({ device }) {
+  const ctx = deviceContext(device);
+  const [subnet, setSubnet] = useState(ctx.subnet || "192.168.1.0/24");
   const [networkResult, setNetworkResult] = useState(null);
   const [usbResult, setUsbResult] = useState(null);
   const [arpResult, setArpResult] = useState(null);
@@ -15,6 +17,15 @@ export default function DiscoveryPanel() {
   const [camerasOnly, setCamerasOnly] = useState(false);
   const [connecting, setConnecting] = useState("");
   const [snapResult, setSnapResult] = useState("");
+  const autoRan = useRef(false);
+
+  useEffect(() => {
+    if (ctx.subnet) setSubnet(ctx.subnet);
+    if (ctx.subnet && !autoRan.current) {
+      autoRan.current = true;
+      scanNetwork(ctx.subnet);
+    }
+  }, [ctx.subnet]);
 
   async function scanNetwork(target) {
     setLoading(true);
@@ -73,6 +84,16 @@ export default function DiscoveryPanel() {
     <div className="panel-inner discovery-panel">
       <h3><Network size={14} /> Device Discovery</h3>
       <p className="muted">Scan a subnet, the local ARP table, or USB bus for nearby devices.</p>
+
+      {device?.id && (
+        <div className="tool-device-context">
+          <Crosshair size={12} />
+          {device.identifier}
+          {ctx.imei ? ` · IMEI ${ctx.imei}` : ""}
+          {ctx.ip ? ` · ${ctx.ip}` : ""}
+        </div>
+      )}
+      {!device?.id && <p className="muted">No connected device — scans default to a generic /24.</p>}
 
       <div className="input-row">
         <input value={subnet} onChange={(e) => setSubnet(e.target.value)} placeholder="Subnet (CIDR)" />
