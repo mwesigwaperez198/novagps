@@ -43,6 +43,7 @@ export const api = {
   health: () => request("/health"),
   login: (payload) => request("/auth/login", { method: "POST", body: JSON.stringify(payload) }),
   devices: () => request("/devices"),
+  getDevice: (deviceId) => request(`/devices/${encodeURIComponent(deviceId)}`),
   search: (q) => request(`/search?q=${encodeURIComponent(q)}`),
   locations: (deviceId, limit = 160) => request(`/devices/${encodeURIComponent(deviceId)}/locations?limit=${limit}`),
   updateLocation: (payload) => request("/update-location", { method: "POST", body: JSON.stringify(payload) }),

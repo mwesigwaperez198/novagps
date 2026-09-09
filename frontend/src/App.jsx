@@ -79,6 +79,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [nearby, setNearby] = useState(null);
   const wsRef = useRef(null);
+  const fetchedNewDevices = useRef(new Set());
 
   const selectedDevice = useMemo(
     () => devices.find((device) => device.id === selectedDeviceId) || devices[0],
@@ -122,13 +123,32 @@ export default function App() {
         try {
           const data = JSON.parse(event.data);
           if (data.event === "location.updated" && data.device_id) {
-            setDevices((items) =>
-              items.map((device) =>
+            setDevices((items) => {
+              const known = items.some((device) => device.id === data.device_id);
+              if (!known) {
+                if (!fetchedNewDevices.current.has(data.device_id)) {
+                  fetchedNewDevices.current.add(data.device_id);
+                  api
+                    .getDevice(data.device_id)
+                    .then((device) => {
+                      setDevices((current) =>
+                        current.some((entry) => entry.id === device.id)
+                          ? current
+                          : [{ ...device, latest_location: data }, ...current],
+                      );
+                    })
+                    .catch(() => {
+                      fetchedNewDevices.current.delete(data.device_id);
+                    });
+                }
+                return items;
+              }
+              return items.map((device) =>
                 device.id === data.device_id
                   ? { ...device, latest_location: data }
                   : device,
-              ),
-            );
+              );
+            });
           }
         } catch (e) {
           // ignore parse errors

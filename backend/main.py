@@ -323,6 +323,7 @@ def ensure_device_for_identifier(
             scope="location,tracking,security",
         )
     )
+    db.flush()
     return device
 
 
