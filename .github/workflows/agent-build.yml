@@ -26,8 +26,15 @@ jobs:
         with:
           packages: "platforms;android-34 build-tools;34.0.0"
 
-      - name: Validate gradle wrapper
-        run: test -x ./gradlew
+      # The repo ships a stub gradlew without gradle-wrapper.jar, so we
+      # bootstrap the real wrapper from the setup-gradle toolchain before
+      # invoking the build. This also makes local Android Studio happy.
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Generate gradle wrapper
+        run: gradle wrapper --gradle-version 8.7 --distribution-type bin
 
       - name: Assemble debug APK
         run: ./gradlew app:assembleDebug --no-daemon
