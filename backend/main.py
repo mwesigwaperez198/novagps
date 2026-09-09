@@ -529,12 +529,12 @@ def device_self_locate(
 
 @app.get("/traccar", status_code=status.HTTP_202_ACCEPTED)
 def traccar_compatible_update(
+    request: Request,
     id: str = Query(..., min_length=3, max_length=160),
     lat: float = Query(..., ge=-90, le=90),
     lon: float = Query(..., ge=-180, le=180),
     speed: float | None = Query(None, ge=0),
     bearing: float | None = Query(None, ge=0, le=360),
-    request: Request,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     payload = LocationUpdateRequest(
