@@ -26,6 +26,7 @@ RUN pip install --upgrade pip \
     && pip install --no-cache-dir -r /app/requirements.txt
 
 COPY backend/ /app/
+COPY nova_core/ /app/nova_core/
 # main.py resolves the UI at Path(__file__).parent.parent / "frontend" / "dist"
 # i.e. /frontend/dist in this image.
 COPY frontend/dist/ /frontend/dist/

@@ -2475,9 +2475,13 @@ _nova_log = _nova_logging.getLogger("nova_core")
 
 try:
     import sys as _sys
-    _nova_core_path = Path(__file__).resolve().parent.parent
-    if str(_nova_core_path) not in _sys.path:
-        _sys.path.insert(0, str(_nova_core_path))
+    _nova_core_parent = Path(__file__).resolve().parent
+    _nova_core_grandparent = _nova_core_parent.parent
+    for _candidate in (_nova_core_parent, _nova_core_grandparent):
+        if (_candidate / "nova_core" / "routes.py").exists():
+            if str(_candidate) not in _sys.path:
+                _sys.path.insert(0, str(_candidate))
+            break
     from nova_core.routes import register_nova_routes
     register_nova_routes(app)
     _nova_log.info("nova-core routes registered")
