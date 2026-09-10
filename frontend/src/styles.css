@@ -390,7 +390,7 @@ select {
 
 .tools-dock {
   min-height: 0;
-  height: 320px;
+  height: 400px;
   display: grid;
   grid-template-rows: 32px minmax(0, 1fr);
   border: 1px solid var(--line);
@@ -410,7 +410,8 @@ select {
 
 .tools-tabs .panel-tab {
   flex: 0 0 auto;
-  min-width: 52px;
+  min-width: 44px;
+  padding: 0 6px;
 }
 
 .panel-tabs {

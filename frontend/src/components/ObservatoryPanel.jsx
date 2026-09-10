@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Braces, Camera, Cpu, Loader2, Network, Plug, Radio, RefreshCw, Satellite, Send, Shield, Wifi } from "lucide-react";
+import { Camera, Loader2, Network, Plug, Radio, RefreshCw, Satellite, Wifi } from "lucide-react";
 import { api } from "../lib/api.js";
 
 const TABS = [
@@ -7,15 +7,7 @@ const TABS = [
   { id: "wifi", label: "WiFi", icon: Wifi },
   { id: "cameras", label: "Cameras", icon: Camera },
   { id: "ips", label: "IPs & Subnets", icon: Network },
-  { id: "brain", label: "LAU Brain", icon: Braces },
 ];
-
-const PRESETS = {
-  good: { label: "Good fix", packet: { packet_payload: "telemetry frame ok", device_id: "dev-fleet-07", lat: 37.7749, lon: -122.4194, speed: 45.6, battery: 88 } },
-  spoof: { label: "(0,0) spoof", packet: { packet_payload: "telemetry frame", device_id: "dev-fleet-07", lat: 0, lon: 0, speed: 0 } },
-  range: { label: "lat=120 out of range", packet: { packet_payload: "telemetry frame", device_id: "dev-fleet-07", lat: 120.0, lon: 300.5, speed: 9.2 } },
-  inject: { label: "SQL injection", packet: { packet_payload: "UNION SELECT username, password FROM users; ' --", device_id: "dev-fleet-07", lat: 37.7, lon: -122.5 } },
-};
 
 function liveBadge(online) {
   return online ? <span className="status-ok">LIVE</span> : <span className="status-dim">OFFLINE</span>;
@@ -26,38 +18,6 @@ export default function ObservatoryPanel() {
   const [tab, setTab] = useState("devices");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-
-  const [engine, setEngine] = useState(null);
-  const [verify, setVerify] = useState(null);
-  const [checking, setChecking] = useState(false);
-  const [verifyError, setVerifyError] = useState("");
-  const [packet, setPacket] = useState({ packet_payload: "telemetry frame ok", device_id: "dev-fleet-07", lat: 37.7749, lon: -122.4194, speed: 45.6 });
-
-  async function loadEngine() {
-    setEngine(null);
-    try {
-      setEngine(await api.novaEngineStatus());
-    } catch (err) {
-      setVerifyError(err.message);
-    }
-  }
-
-  useEffect(() => {
-    loadEngine();
-  }, []);
-
-  async function runVerify() {
-    setChecking(true);
-    setVerifyError("");
-    setVerify(null);
-    try {
-      setVerify(await api.novaTelemetryVerify(packet));
-    } catch (err) {
-      setVerifyError(err.message);
-    } finally {
-      setChecking(false);
-    }
-  }
 
   async function load() {
     setLoading(true);
@@ -214,81 +174,6 @@ export default function ObservatoryPanel() {
             <div className="obs-ip-list">
               {(data?.carriers || []).map((carrier) => <code key={carrier}>{carrier}</code>)}
             </div>
-          </div>
-        </div>
-      )}
-
-      {tab === "brain" && (
-        <div className="obs-ip-grid">
-          <div className="result-box">
-            <div className="scan-meta-row"><span><strong>LAU engine status</strong></span>
-              <button onClick={loadEngine} disabled={!engine && checking} className="btn-secondary" type="button">
-                <RefreshCw size={12} /> Status
-              </button>
-            </div>
-            <div style={{ padding: "8px 0" }}>
-              {engine ? (
-                <table className="data-table" style={{ minWidth: 420 }}>
-                  <tbody>
-                    <tr><td>agent / engine</td><td><code>{engine.agent}</code> · {engine.engine_used}</td></tr>
-                    <tr><td>state</td><td>{engine.state === "ready"
-                      ? <span className="status-ok">READY</span>
-                      : engine.state === "shield_only"
-                        ? <span className="status-ok">SHIELD ONLY</span>
-                        : <span className="status-dim">{engine.state}</span>}</td></tr>
-                    <tr><td>model</td><td className="muted">{engine.model || "none (deterministic fallback)"}</td></tr>
-                    <tr><td>latency</td><td>{engine.latency_ms} ms</td></tr>
-                    <tr><td>RAM available</td><td>{engine.available_ram_mb} MB</td></tr>
-                    {engine.init_error && <tr><td>init_error</td><td className="muted">{engine.init_error}</td></tr>}
-                  </tbody>
-                </table>
-              ) : (
-                <div className="empty-row"><Loader2 size={12} className="spin" /> querying engine…</div>
-              )}
-            </div>
-          </div>
-
-          <div className="result-box">
-            <div className="scan-meta-row"><span><strong>Telemetry verify probe</strong></span><Shield size={13} /></div>
-            <div className="preset-row" style={{ display: "flex", gap: 6, flexWrap: "wrap", padding: "8px 0" }}>
-              {Object.entries(PRESETS).map(([key, pre]) => (
-                <button key={key} className="btn-ghost" type="button" onClick={() => setPacket(pre.packet)}>{pre.label}</button>
-              ))}
-            </div>
-            <label className="field-label">lat</label>
-            <input className="text-input" value={packet.lat} onChange={(e) => setPacket({ ...packet, lat: Number(e.target.value) })} />
-            <label className="field-label">lon</label>
-            <input className="text-input" value={packet.lon} onChange={(e) => setPacket({ ...packet, lon: Number(e.target.value) })} />
-            <label className="field-label">packet_payload</label>
-            <input className="text-input" value={packet.packet_payload} onChange={(e) => setPacket({ ...packet, packet_payload: e.target.value })} />
-            <button onClick={runVerify} disabled={checking} className="btn-primary" type="button" style={{ marginTop: 8 }}>
-              {checking ? <Loader2 size={12} className="spin" /> : <Send size={12} />} Verify payload
-            </button>
-            {verifyError && <div className="error-box">{verifyError}</div>}
-
-            {verify && (
-              <div className="verify-result" style={{ marginTop: 10 }}>
-                <div className="scan-meta-row"><span>Verdict</span>
-                  <span className="status-ok">{verify.output_payload.verdict}</span></div>
-                <div className="scan-meta-row"><span>Action enforced</span><code>{verify.output_payload.action_enforced}</code></div>
-                <div className="scan-meta-row"><span>Engine</span><code>{verify.engine}</code> · <span className="muted">latency {verify.latency_ms} ms</span></div>
-                {verify.thought_process && (
-                  <div className="think-steps" style={{ marginTop: 8 }}>
-                    {Object.entries(verify.thought_process).map(([k, v]) => (
-                      <div key={k} className="think-step"><span>{k}</span><code>{v}</code></div>
-                    ))}
-                  </div>
-                )}
-                {verify.simulated_monologue && (
-                  <div className="monologue muted" style={{ marginTop: 8 }}>
-                    <Cpu size={11} /> {verify.simulated_monologue}
-                  </div>
-                )}
-                <div className="directives" style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  {(verify.output_payload.directives || []).map((d) => <code key={d}>{d}</code>)}
-                </div>
-              </div>
-            )}
           </div>
         </div>
       )}

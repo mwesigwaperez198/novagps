@@ -19,7 +19,7 @@ import IDSPanel from "./components/IDSPanel.jsx";
 import LiveMap from "./components/LiveMap.jsx";
 import LoginScreen from "./components/LoginScreen.jsx";
 import LogsPanel from "./components/LogsPanel.jsx";
-import LAUShieldPanel from "./components/LAUShieldPanel.jsx";
+import LAUAgentPanel from "./components/LAUAgentPanel.jsx";
 import NearbyScanPanel from "./components/NearbyScanPanel.jsx";
 import ObservatoryPanel from "./components/ObservatoryPanel.jsx";
 import OSINTPanel from "./components/OSINTPanel.jsx";
@@ -45,6 +45,7 @@ function hashLine(value) {
 }
 
 const PANEL_TABS = [
+  { id: "lau", label: "LAU" },
   { id: "terminal", label: "DIAG" },
   { id: "scan", label: "SCAN" },
   { id: "osint", label: "OSINT" },
@@ -58,7 +59,6 @@ const PANEL_TABS = [
   { id: "discovery", label: "DISC" },
   { id: "net", label: "NET" },
   { id: "observatory", label: "OBS" },
-  { id: "shield", label: "SHLD" },
   { id: "wifi", label: "WIFI" },
   { id: "firmware", label: "FW" },
   { id: "vehicle", label: "VHC" },
@@ -347,6 +347,7 @@ export default function App() {
             ))}
           </div>
           <div className="panel-content">
+            {activePanel === "lau" && <LAUAgentPanel />}
             {activePanel === "terminal" && <TerminalPanel />}
             {activePanel === "scan" && <ScanPanel device={selectedDevice} />}
             {activePanel === "osint" && <OSINTPanel />}
@@ -359,7 +360,6 @@ export default function App() {
             {activePanel === "fingerprint" && <FingerprintPanel device={selectedDevice} />}
             {activePanel === "discovery" && <DiscoveryPanel device={selectedDevice} />}
             {activePanel === "observatory" && <ObservatoryPanel />}
-            {activePanel === "shield" && <LAUShieldPanel />}
             {activePanel === "net" && <NearbyScanPanel device={selectedDevice} onResults={(data) => setNearby(data)} />}
             {activePanel === "wifi" && <WifiPanel />}
             {activePanel === "firmware" && <FirmwarePanel device={selectedDevice} />}

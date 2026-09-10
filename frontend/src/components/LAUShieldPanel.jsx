@@ -1,18 +1,11 @@
-import { useEffect, useState } from "react";
-import { AlertTriangle, Braces, CheckCircle2, ChevronDown, ChevronRight, Loader2, Play, Radio, Send, Shield, ShieldCheck, Terminal } from "lucide-react";
+import { useState } from "react";
+import { AlertTriangle, Braces, CheckCircle2, ChevronDown, ChevronRight, Loader2, Play, Send, ShieldCheck, Terminal } from "lucide-react";
 import { api } from "../lib/api.js";
 
 const DEFAULT_PROMPT =
   "A compromised asset terminal is streaming fabricated GPS fixes with NaN latitude and 1e300 " +
   "out-of-range coordinates to escape the tracking validation stream. Run the localized tracking " +
   "logic and emit a validation filter that drops invalid fixes before the routing pipeline.";
-
-function stateChip(state) {
-  if (!state) return null;
-  if (state === "ready") return <span className="status-ok">READY</span>;
-  if (state === "shield_only") return <span className="status-ok">SHIELD ONLY</span>;
-  return <span className="status-dim">{state}</span>;
-}
 
 function laneChip(lane) {
   const ok = lane.route_matched && lane.compile_ok && lane.run_ok && !lane.error;
@@ -126,7 +119,6 @@ function LaneCard({ lane }) {
 }
 
 export default function LAUShieldPanel() {
-  const [engine, setEngine] = useState(null);
   const [lanes, setLanes] = useState(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
@@ -134,19 +126,6 @@ export default function LAUShieldPanel() {
   const [emit, setEmit] = useState(null);
   const [emitting, setEmitting] = useState(false);
   const [emitError, setEmitError] = useState("");
-
-  async function loadEngine() {
-    setError("");
-    try {
-      setEngine(await api.novaEngineStatus());
-    } catch (err) {
-      setError(err.message);
-    }
-  }
-
-  useEffect(() => {
-    loadEngine();
-  }, []);
 
   async function runValidators() {
     setRunning(true);
@@ -176,32 +155,14 @@ export default function LAUShieldPanel() {
   }
 
   return (
-    <div className="panel-inner observatory-panel">
-      <h3><Shield size={14} /> LAU Shield — Deterministic Core</h3>
-      <p className="muted">
-        The machine-parseable output contract for every shield lane: numbered 4-step thought frame,
-        JSON payload with alert badges, and the emitted source that runs on its own.
-      </p>
-
+    <div className="shld">
       <div className="toolbar-row" style={{ marginTop: 4 }}>
         <button onClick={runValidators} disabled={running} className="btn-primary" type="button">
           {running ? <Loader2 size={12} className="spin" /> : <Play size={12} />} Run Module Validators
         </button>
-        <button onClick={loadEngine} disabled={running} className="btn-secondary" type="button">
-          <Radio size={12} /> Engine status
-        </button>
       </div>
 
       {error && <div className="error-box" style={{ marginTop: 8 }}>{error}</div>}
-
-      {engine && (
-        <div className="result-box" style={{ marginTop: 10 }}>
-          <div className="scan-meta-row"><span>LAU engine</span><code>{engine.agent}</code> · {engine.engine_used}</div>
-          <div className="scan-meta-row"><span>state</span>{stateChip(engine.state)}</div>
-          <div className="scan-meta-row"><span>model</span><span className="muted">{engine.model || "none (deterministic fallback)"}</span></div>
-          <div className="scan-meta-row"><span>latency</span><span>{engine.latency_ms} ms</span></div>
-        </div>
-      )}
 
       {lanes && (
         <div style={{ marginTop: 10 }}>
