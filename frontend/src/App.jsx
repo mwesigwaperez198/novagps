@@ -19,7 +19,7 @@ import IDSPanel from "./components/IDSPanel.jsx";
 import LiveMap from "./components/LiveMap.jsx";
 import LoginScreen from "./components/LoginScreen.jsx";
 import LogsPanel from "./components/LogsPanel.jsx";
-import LAUAgentPanel from "./components/LAUAgentPanel.jsx";
+import LAUHud from "./components/LAUAgentPanel.jsx";
 import NearbyScanPanel from "./components/NearbyScanPanel.jsx";
 import ObservatoryPanel from "./components/ObservatoryPanel.jsx";
 import OSINTPanel from "./components/OSINTPanel.jsx";
@@ -45,7 +45,6 @@ function hashLine(value) {
 }
 
 const PANEL_TABS = [
-  { id: "lau", label: "LAU" },
   { id: "terminal", label: "DIAG" },
   { id: "scan", label: "SCAN" },
   { id: "osint", label: "OSINT" },
@@ -88,6 +87,21 @@ export default function App() {
   const [nearby, setNearby] = useState(null);
   const wsRef = useRef(null);
   const fetchedNewDevices = useRef(new Set());
+  const [lauOpen, setLauOpen] = useState(false);
+
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.ctrlKey && e.key === "/") {
+        e.preventDefault();
+        setLauOpen((prev) => !prev);
+      }
+      if (e.key === "Escape" && lauOpen) {
+        setLauOpen(false);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [lauOpen]);
 
   const selectedDevice = useMemo(
     () => devices.find((device) => device.id === selectedDeviceId) || devices[0],
@@ -347,7 +361,6 @@ export default function App() {
             ))}
           </div>
           <div className="panel-content">
-            {activePanel === "lau" && <LAUAgentPanel />}
             {activePanel === "terminal" && <TerminalPanel />}
             {activePanel === "scan" && <ScanPanel device={selectedDevice} />}
             {activePanel === "osint" && <OSINTPanel />}
@@ -383,6 +396,20 @@ export default function App() {
           </div>
         ))}
       </div>
+
+      <footer className="nova-footer">
+        <div className="nova-footer-lau" onClick={() => setLauOpen(true)} role="button" tabIndex={0} onKeyDown={(e) => e.key === "Enter" && setLauOpen(true)}>
+          <span className="lau-footer-ping">
+            <span className="lau-footer-ping-ring" />
+            <span className="lau-footer-ping-dot" />
+          </span>
+          <span className="lau-footer-label">AGENT SEC // </span>
+          <span className="lau-footer-active">LAU: ACTIVE</span>
+        </div>
+        <div className="nova-footer-shortcut">SHIFT + CTRL + / FOR HUD OVERRIDE</div>
+      </footer>
+
+      <LAUHud isOpen={lauOpen} onClose={() => setLauOpen(false)} />
     </main>
   );
 }
