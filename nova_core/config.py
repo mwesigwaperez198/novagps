@@ -24,6 +24,7 @@ class NovaCoreConfig:
     secret_key: str = field(default_factory=lambda: os.environ.get("SECRET_KEY", ""))
 
     watch_interval: int = field(default_factory=lambda: int(os.environ.get("NOVA_WATCH_INTERVAL", "60")))
+    watch_enabled: bool = field(default_factory=lambda: os.environ.get("NOVA_WATCH_ENABLED", "1") == "1")
     scan_interval: int = field(default_factory=lambda: int(os.environ.get("NOVA_SCAN_INTERVAL", "300")))
     fuzz_interval: int = field(default_factory=lambda: int(os.environ.get("NOVA_FUZZ_INTERVAL", "3600")))
 

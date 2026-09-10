@@ -2479,6 +2479,11 @@ try:
 
     from nova_core.engine import get_engine
     get_engine().start_async()
+
+    from nova_core.config import get_config
+    if get_config().watch_enabled:
+        from nova_core.watcher import NovaWatcher
+        NovaWatcher().start_async()
 except Exception:
     pass
 

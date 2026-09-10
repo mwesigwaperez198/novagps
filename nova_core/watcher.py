@@ -5,11 +5,14 @@ and application state. Records anomalies to persistent memory.
 """
 
 import asyncio
+import hashlib
 import json
 import os
+import re
 import time
 import random
 import subprocess
+import threading
 import logging
 from pathlib import Path
 from typing import Optional, Callable, List
@@ -40,6 +43,16 @@ class NovaWatcher:
 
     def on_anomaly(self, callback: Callable):
         self._callbacks.append(callback)
+
+    def start_async(self, interval: Optional[int] = None):
+        thread = threading.Thread(
+            target=self._run_async_loop, args=(interval,), name="nova-watcher", daemon=True
+        )
+        thread.start()
+        return thread
+
+    def _run_async_loop(self, interval: Optional[int]):
+        asyncio.run(self.start(interval))
 
     async def start(self, interval: Optional[int] = None):
         self._running = True
@@ -89,6 +102,12 @@ class NovaWatcher:
                         cb(anomaly)
                     except Exception:
                         pass
+
+        sys_data = snapshot.get("system", {})
+        self._learn_memory_pressure(sys_data.get("memory_percent", 0))
+        self._check_engine_state()
+        self._learn_from_probes()
+        self._audit_memory_chain()
 
         self.memory.set_state("last_watch_snapshot", json.dumps({
             "timestamp": snapshot["timestamp"],
@@ -244,6 +263,115 @@ class NovaWatcher:
             })
 
         return anomalies
+
+    def _dedupe_learn(self, signature: str, min_interval_s: float = 1800.0) -> bool:
+        key = f"learned:{signature}"
+        try:
+            last = float(self.memory.get_state(key, "0"))
+        except Exception:
+            last = 0.0
+        now = time.time()
+        if now - last < min_interval_s:
+            return False
+        self.memory.set_state(key, str(now))
+        return True
+
+    @staticmethod
+    def _obstacle_fingerprint(text: str) -> str:
+        tokens = re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).split()
+        return " ".join(tokens)[:64]
+
+    def _learn_from_probes(self):
+        lesson_rows = self.memory.get_recent_lessons(limit=40)
+        stats: dict = {}
+        sample_by_sig: dict = {}
+        for row in lesson_rows:
+            if row.get("category") in ("shield_deployment", "learned_reasoning"):
+                sig = self._obstacle_fingerprint(row.get("obstacle", ""))
+                if not sig:
+                    continue
+                stats[sig] = stats.get(sig, 0) + 1
+                sample_by_sig.setdefault(sig, row.get("category"))
+        for sig, count in stats.items():
+            if count >= 3 and self._dedupe_learn(f"escalation:{sig}", 1800):
+                self.memory.log_lesson(
+                    engine="WATCHER",
+                    obstacle=f"Repeated probe vector observed: {sig}",
+                    maneuver=f"{count} detections inside the watch window (escalating pattern)",
+                    delta=("Autonomously learned from observation budget; escalation watch engaged at no prompt."),
+                )
+                self.memory.create_alert(
+                    "probe_escalation",
+                    f"Pattern learned: '{sig}' fired {count} times in the watch window.",
+                    "nova_watcher",
+                )
+
+    def _audit_memory_chain(self):
+        try:
+            conn = self.memory._get_conn()
+            rows = conn.execute(
+                "SELECT obstacle, maneuver, hash_chain FROM lessons ORDER BY id"
+            ).fetchall()
+        except Exception:
+            return
+        prev = "genesis"
+        broken = 0
+        for obstacle, maneuver, chain_hash in rows:
+            expected = hashlib.sha256(
+                f"{prev}:{obstacle}:{maneuver}".encode()
+            ).hexdigest()[:16]
+            if chain_hash != expected:
+                broken += 1
+            prev = chain_hash
+        total = len(rows)
+        if broken and self._dedupe_learn("chain-breach", 600):
+            self.memory.create_alert(
+                "integrity_breach",
+                f"Memory chain integrity: {broken} broken link(s) of {total}.",
+                "nova_watcher",
+            )
+            self.memory.log_lesson(
+                engine="WATCHER",
+                obstacle="Memory hash-chain integrity breach",
+                maneuver=f"{broken}/{total} links failed recomputation",
+                delta="Self-audit detected tamper or corruption and raised alerts.",
+            )
+        self.memory.set_state(
+            "chain_stats", json.dumps({"total": total, "verified": total - broken, "passed": broken == 0})
+        )
+
+    def _check_engine_state(self):
+        try:
+            from .engine import get_engine
+
+            state = get_engine().state
+        except Exception:
+            return
+        last = self.memory.get_state("engine_state", "")
+        if last and last != state:
+            transition = f"{last} -> {state}"
+            if self._dedupe_learn(f"engine:{transition}", 300):
+                maneuver = (
+                    "Autonomous hot-swap to deterministic shield engaged."
+                    if state == "shield_only"
+                    else "Embedded LLM brain recovered or cycled."
+                )
+                self.memory.log_lesson(
+                    engine="WATCHER",
+                    obstacle=f"Engine state transition observed: {transition}",
+                    maneuver=maneuver,
+                    delta="State machine change captured without any prompt.",
+                )
+        self.memory.set_state("engine_state", state)
+
+    def _learn_memory_pressure(self, mem_pct):
+        if mem_pct >= 85 and self._dedupe_learn("oom-pressure", 1800):
+            self.memory.log_lesson(
+                engine="WATCHER",
+                obstacle="Memory pressure threshold crossed",
+                maneuver=f"Memory at {mem_pct}% — deterministic shield is the self-preservation path",
+                delta="OOM-risk constraint isolated automatically.",
+            )
 
     def get_current_snapshot(self) -> dict:
         return self.state.system_snapshot

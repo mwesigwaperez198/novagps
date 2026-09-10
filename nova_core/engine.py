@@ -198,7 +198,9 @@ class NovaCognitiveEngine:
     def telemetry_verify(self, packet: dict) -> dict:
         if self.engine_used == "DETERMINISTIC_SHIELD" or self.llm is None:
             self._ensure_shield()
-            return self.shield.telemetry_verify(packet)
+            result = self.shield.telemetry_verify(packet)
+            self._capture_shield_event("", json.dumps(packet, default=str), result)
+            return result
 
         raw = json.dumps(packet, default=str)
         result = self.execute_reasoning_loop(
