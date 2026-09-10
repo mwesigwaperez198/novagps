@@ -1,136 +1,88 @@
-import { useEffect, useState } from "react";
-import { Braces, Cpu, Loader2, Radio, RefreshCw, Send, Shield } from "lucide-react";
+import { useState, useRef, useEffect } from "react";
+import {
+  Braces, Camera, Crosshair, Fingerprint, Loader2, MapPin,
+  Network, Radio, ScanLine, Send, ShieldCheck, ShieldAlert,
+  Truck, Unlock, Wifi, Zap,
+} from "lucide-react";
 import { api } from "../lib/api.js";
-import LAUShieldPanel from "./LAUShieldPanel.jsx";
 
-const TABS = [
-  { id: "engine", label: "Engine", icon: Radio },
-  { id: "probe", label: "Probe", icon: Send },
-  { id: "shield", label: "Shield", icon: Shield },
+const QUICK_ACTIONS = [
+  { id: "health", label: "System Health", icon: Zap, command: "analyze system health and status" },
+  { id: "ports", label: "Port Scan", icon: ScanLine, command: "scan open ports on localhost" },
+  { id: "network", label: "Network Info", icon: Network, command: "show network interfaces and connectivity" },
+  { id: "processes", label: "Processes", icon: Radio, command: "list running processes" },
+  { id: "cameras", label: "Find Cameras", icon: Camera, command: "discover cameras on the network" },
+  { id: "fingerprint", label: "Fingerprint", icon: Fingerprint, command: "fingerprint the connected device" },
+  { id: "locate", label: "Locate Device", icon: MapPin, command: "locate the connected device" },
+  { id: "track", label: "Track Vehicle", icon: Truck, command: "track the vehicle" },
+  { id: "shield", label: "Shield Validate", icon: ShieldCheck, command: "run all shield validators" },
+  { id: "vuln", label: "Vuln Scan", icon: ShieldAlert, command: "run vulnerability scan" },
+  { id: "dns", label: "DNS Resolve", icon: Wifi, command: "resolve dns for google.com" },
+  { id: "traceroute", label: "Traceroute", icon: Crosshair, command: "traceroute to 8.8.8.8" },
 ];
 
-const PRESETS = {
-  good: { label: "Good fix", packet: { packet_payload: "telemetry frame ok", device_id: "dev-fleet-07", lat: 37.7749, lon: -122.4194, speed: 45.6, battery: 88 } },
-  spoof: { label: "(0,0) spoof", packet: { packet_payload: "telemetry frame", device_id: "dev-fleet-07", lat: 0, lon: 0, speed: 0 } },
-  range: { label: "lat=120 out of range", packet: { packet_payload: "telemetry frame", device_id: "dev-fleet-07", lat: 120.0, lon: 300.5, speed: 9.2 } },
-  inject: { label: "SQL injection", packet: { packet_payload: "UNION SELECT username, password FROM users; ' --", device_id: "dev-fleet-07", lat: 37.7, lon: -122.5 } },
-};
-
-function stateChip(state) {
-  if (!state) return null;
-  if (state === "ready") return <span className="status-ok">READY</span>;
-  if (state === "shield_only") return <span className="status-ok">SHIELD ONLY</span>;
-  return <span className="status-dim">{state}</span>;
-}
-
-function EngineView() {
-  const [engine, setEngine] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-
-  async function load() {
-    setLoading(true);
-    setError("");
-    try {
-      setEngine(await api.novaEngineStatus());
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    load();
-  }, []);
-
+function ThoughtStep({ index, text }) {
   return (
-    <div className="result-box">
-      <div className="scan-meta-row">
-        <span><strong>LAU engine status</strong></span>
-        <button onClick={load} disabled={loading} className="btn-secondary" type="button">
-          {loading ? <Loader2 size={12} className="spin" /> : <RefreshCw size={12} />} Refresh
-        </button>
-      </div>
-      {error && <div className="error-box">{error}</div>}
-      {!engine && !error && <div className="empty-row"><Loader2 size={12} className="spin" /> querying engine…</div>}
-      {engine && (
-        <table className="data-table" style={{ minWidth: 420 }}>
-          <tbody>
-            <tr><td>agent / engine</td><td><code>{engine.agent}</code> · {engine.engine_used}</td></tr>
-            <tr><td>state</td><td>{stateChip(engine.state)}</td></tr>
-            <tr><td>model</td><td className="muted">{engine.model || "none (deterministic fallback)"}</td></tr>
-            <tr><td>latency</td><td>{engine.latency_ms} ms</td></tr>
-            <tr><td>RAM available</td><td>{engine.available_ram_mb} MB</td></tr>
-            {engine.init_error && <tr><td>init_error</td><td className="muted">{engine.init_error}</td></tr>}
-          </tbody>
-        </table>
-      )}
+    <div className="lau-thought-step">
+      <span className="lau-thought-num">{index + 1}</span>
+      <span className="lau-thought-text">{text}</span>
     </div>
   );
 }
 
-function ProbeView() {
-  const [verify, setVerify] = useState(null);
-  const [checking, setChecking] = useState(false);
-  const [error, setError] = useState("");
-  const [packet, setPacket] = useState({ packet_payload: "telemetry frame ok", device_id: "dev-fleet-07", lat: 37.7749, lon: -122.4194, speed: 45.6 });
-
-  async function run() {
-    setChecking(true);
-    setError("");
-    setVerify(null);
-    try {
-      setVerify(await api.novaTelemetryVerify(packet));
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setChecking(false);
-    }
-  }
+function ActionResult({ result }) {
+  if (!result) return null;
+  const intent = result.intent || "unknown";
+  const action = result.action;
+  const response = result.response || "";
+  const thoughtProcess = result.thought_process || [];
+  const toolsExecuted = result.tools_executed || [];
+  const results = result.results || {};
+  const engine = result.engine || "";
 
   return (
-    <div className="result-box">
-      <div className="scan-meta-row"><span><strong>Telemetry verify probe</strong></span><Shield size={13} /></div>
-      <div className="preset-row" style={{ display: "flex", gap: 6, flexWrap: "wrap", padding: "8px 0" }}>
-        {Object.entries(PRESETS).map(([key, pre]) => (
-          <button key={key} className="btn-ghost" type="button" onClick={() => setPacket(pre.packet)}>{pre.label}</button>
-        ))}
+    <div className="lau-result-card">
+      <div className="lau-result-header">
+        <div className="lau-result-intent">
+          <Zap size={12} /> {intent.replace(/_/g, " ")}
+        </div>
+        {engine && <span className="lau-result-engine">{engine}</span>}
       </div>
-      <label className="field-label">lat</label>
-      <input className="text-input" value={packet.lat} onChange={(e) => setPacket({ ...packet, lat: Number(e.target.value) })} />
-      <label className="field-label">lon</label>
-      <input className="text-input" value={packet.lon} onChange={(e) => setPacket({ ...packet, lon: Number(e.target.value) })} />
-      <label className="field-label">speed</label>
-      <input className="text-input" value={packet.speed} onChange={(e) => setPacket({ ...packet, speed: Number(e.target.value) })} />
-      <label className="field-label">packet_payload</label>
-      <input className="text-input" value={packet.packet_payload} onChange={(e) => setPacket({ ...packet, packet_payload: e.target.value })} />
-      <button onClick={run} disabled={checking} className="btn-primary" type="button" style={{ marginTop: 8 }}>
-        {checking ? <Loader2 size={12} className="spin" /> : <Send size={12} />} Verify payload
-      </button>
-      {error && <div className="error-box">{error}</div>}
 
-      {verify && (
-        <div className="verify-result" style={{ marginTop: 10 }}>
-          <div className="scan-meta-row"><span>Verdict</span>
-            <span className="status-ok">{verify.output_payload.verdict}</span></div>
-          <div className="scan-meta-row"><span>Action enforced</span><code>{verify.output_payload.action_enforced}</code></div>
-          <div className="scan-meta-row"><span>Engine</span><code>{verify.engine}</code> · <span className="muted">latency {verify.latency_ms} ms</span></div>
-          {verify.thought_process && (
-            <div className="think-steps" style={{ marginTop: 8 }}>
-              {Object.entries(verify.thought_process).map(([k, v]) => (
-                <div key={k} className="think-step"><span>{k}</span><code>{v}</code></div>
-              ))}
-            </div>
-          )}
-          {verify.simulated_monologue && (
-            <div className="monologue muted" style={{ marginTop: 8 }}>
-              <Cpu size={11} /> {verify.simulated_monologue}
-            </div>
-          )}
-          <div className="directives" style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap" }}>
-            {(verify.output_payload.directives || []).map((d) => <code key={d}>{d}</code>)}
+      {thoughtProcess.length > 0 && (
+        <div className="lau-thought-block">
+          {thoughtProcess.map((step, i) => <ThoughtStep key={i} index={i} text={step} />)}
+        </div>
+      )}
+
+      <div className="lau-result-response">{response}</div>
+
+      {toolsExecuted.length > 0 && (
+        <div className="lau-result-tools">
+          Tools: {toolsExecuted.map((t) => <code key={t}>{t}</code>)}
+        </div>
+      )}
+
+      {Object.keys(results).length > 0 && Object.entries(results).map(([key, val]) => {
+        if (key === "_reasoning") return null;
+        const output = val?.output || val;
+        if (!output || (typeof output === "object" && Object.keys(output).length === 0)) return null;
+        return (
+          <div key={key} className="lau-result-section">
+            <div className="lau-result-section-label">{key.replace(/_/g, " ")}</div>
+            {typeof output === "string" ? (
+              <pre className="lau-result-code">{output}</pre>
+            ) : (
+              <pre className="lau-result-code">{JSON.stringify(output, null, 2)}</pre>
+            )}
           </div>
+        );
+      })}
+
+      {action && (
+        <div className="lau-result-action">
+          <span className="lau-action-badge">{action.method}</span>
+          <code>{action.endpoint}</code>
         </div>
       )}
     </div>
@@ -138,32 +90,145 @@ function ProbeView() {
 }
 
 export default function LAUAgentPanel() {
-  const [tab, setTab] = useState("shield");
+  const [input, setInput] = useState("");
+  const [history, setHistory] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [engineState, setEngineState] = useState(null);
+  const scrollRef = useRef(null);
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    api.novaEngineStatus()
+      .then(setEngineState)
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [history]);
+
+  async function dispatch(command) {
+    if (!command.trim() || loading) return;
+    const entry = { id: Date.now(), role: "user", text: command };
+    setHistory((h) => [...h, entry]);
+    setInput("");
+    setLoading(true);
+    try {
+      const result = await api.novaAgentDispatch(command);
+      setHistory((h) => [...h, { id: Date.now(), role: "lau", result }]);
+    } catch (err) {
+      setHistory((h) => [...h, {
+        id: Date.now(),
+        role: "lau",
+        result: { intent: "error", response: `LAU error: ${err.message}`, thought_process: [] },
+      }]);
+    } finally {
+      setLoading(false);
+      inputRef.current?.focus();
+    }
+  }
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    dispatch(input);
+  }
+
+  const engineReady = engineState?.state === "ready" || engineState?.state === "shield_only";
 
   return (
-    <div className="panel-inner observatory-panel">
-      <h3><Braces size={14} /> LAU Agent</h3>
-      <p className="muted">
-        The LAU operating home: engine status, telemetry probe, and the deterministic
-        shield with its module validators. The agent works from here.
-      </p>
-
-      <div className="tab-row" style={{ marginTop: 8 }}>
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            className={`tab-btn ${tab === t.id ? "active" : ""}`}
-            onClick={() => setTab(t.id)}
-            type="button"
-          >
-            <t.icon size={12} /> {t.label}
-          </button>
-        ))}
+    <div className="lau-panel">
+      <div className="lau-header">
+        <div className="lau-header-left">
+          <Braces size={16} className="lau-icon" />
+          <div>
+            <div className="lau-title">LAU AGENT</div>
+            <div className="lau-subtitle">Queen of the System</div>
+          </div>
+        </div>
+        <div className="lau-header-right">
+          <span className={engineReady ? "lau-status-dot online" : "lau-status-dot"}>
+            {engineState?.state || "loading"}
+          </span>
+        </div>
       </div>
 
-      {tab === "engine" && <EngineView />}
-      {tab === "probe" && <ProbeView />}
-      {tab === "shield" && <LAUShieldPanel />}
+      <div className="lau-scroll" ref={scrollRef}>
+        {history.length === 0 && (
+          <div className="lau-welcome">
+            <div className="lau-welcome-text">
+              I am LAU. I can analyze, scan, track, secure, and protect.
+              Tell me what you need or pick an action below.
+            </div>
+            <div className="lau-actions-grid">
+              {QUICK_ACTIONS.map((a) => (
+                <button
+                  key={a.id}
+                  className="lau-action-btn"
+                  onClick={() => dispatch(a.command)}
+                  disabled={loading}
+                  type="button"
+                >
+                  <a.icon size={13} />
+                  <span>{a.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {history.map((entry) => (
+          <div key={entry.id} className={entry.role === "user" ? "lau-msg-user" : "lau-msg-agent"}>
+            {entry.role === "user" ? (
+              <div className="lau-msg-user-bubble">{entry.text}</div>
+            ) : (
+              <ActionResult result={entry.result} />
+            )}
+          </div>
+        ))}
+
+        {loading && (
+          <div className="lau-msg-agent">
+            <div className="lau-thinking">
+              <Loader2 size={13} className="spin" /> LAU is thinking...
+            </div>
+          </div>
+        )}
+
+        {history.length > 0 && !loading && (
+          <div className="lau-actions-row">
+            {QUICK_ACTIONS.slice(0, 6).map((a) => (
+              <button
+                key={a.id}
+                className="lau-action-chip"
+                onClick={() => dispatch(a.command)}
+                type="button"
+              >
+                <a.icon size={11} /> {a.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <form className="lau-input-bar" onSubmit={handleSubmit}>
+        <input
+          ref={inputRef}
+          className="lau-input"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder="Ask LAU anything..."
+          disabled={loading}
+        />
+        <button
+          className="lau-send-btn"
+          type="submit"
+          disabled={loading || !input.trim()}
+        >
+          {loading ? <Loader2 size={14} className="spin" /> : <Send size={14} />}
+        </button>
+      </form>
     </div>
   );
 }

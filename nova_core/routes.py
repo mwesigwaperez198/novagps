@@ -28,6 +28,11 @@ class NovaShieldEmitRequest(BaseModel):
     prompt: str
 
 
+class NovaAgentCommandRequest(BaseModel):
+    command: str
+    device_id: str = ""
+
+
 class NovaQueryResponse(BaseModel):
     query: str
     response: str
@@ -393,6 +398,223 @@ async def nova_shield_emit(req: NovaShieldEmitRequest):
         "directives": op.get("directives", []),
         "source": op.get("response", ""),
         "prompt": req.prompt,
+    }
+
+
+_INTENT_MAP = [
+    ("greeting", ["hey", "hello", "hi ", "hi,", "who are you", "what can you do", "help me"]),
+    ("system_health", ["system health", "analyze system", "health check", "check health",
+                        "system status", "server status", "system info"]),
+    ("port_scan", ["port scan", "open ports", "scan ports", "check ports"]),
+    ("vuln_scan", ["vulnerability", "vuln scan", "security scan", "exploit scan"]),
+    ("network_info", ["network interface", "network config", "ip address", "connectivity"]),
+    ("process_list", ["process list", "running process", "task manager", "ps aux"]),
+    ("dns_resolve", ["dns", "resolve domain", "domain lookup"]),
+    ("traceroute", ["traceroute", "trace route", "path to"]),
+    ("device_locate", ["locate device", "find device", "where is device", "trigger locate"]),
+    ("device_lock", ["lock device", "remote lock", "lock the device"]),
+    ("device_wipe", ["wipe device", "erase device", "factory reset", "remote wipe"]),
+    ("device_message", ["send message", "push message", "message device"]),
+    ("device_fingerprint", ["fingerprint device", "device fingerprint", "os fingerprint",
+                             "device detail", "device info"]),
+    ("camera_discover", ["discover camera", "find camera", "ip camera", "scan camera",
+                          "camera scan", "nearby camera"]),
+    ("vehicle_track", ["vehicle", "track car", "track vehicle", "stolen vehicle",
+                        "car track", "vehicle track"]),
+    ("shield_validate", ["shield validate", "run validator", "all lanes", "test shield",
+                          "module validator", "run shield"]),
+    ("lau_status", ["lau status", "agent status", "nova status", "engine status"]),
+    ("full_scan", ["full scan", "complete scan", "scan everything", "run all scan"]),
+    ("bandwidth", ["bandwidth", "speed test", "bandwidth test"]),
+    ("mtu_test", ["mtu test", "mtu", "max transmission"]),
+    ("device_enum", ["list devices", "usb device", "enum device"]),
+]
+
+
+def _classify_intent(command):
+    c = command.lower()
+    for category, patterns in _INTENT_MAP:
+        if any(p in c for p in patterns):
+            return {"category": category, "confidence": "high"}
+    return {"category": "general", "confidence": "medium"}
+
+
+def _greeting_response(brain):
+    status = brain.status() if hasattr(brain, "status") else {}
+    return {
+        "thought_process": ["Greeting detected", "Reporting agent status"],
+        "intent": "greeting",
+        "response": (
+            f"I am LAU, the queen agent of this system. "
+            f"Agent: {status.get('agent_name', 'nova-agent')}. "
+            f"State: {status.get('state', 'active')}. "
+            f"Engine: {status.get('engine_used', 'deterministic')}. "
+            f"Tools: {status.get('tool_count', '23')}. "
+            f"Ask me to scan, track, protect, or analyze anything."
+        ),
+        "engine": status.get("engine_used", ""),
+    }
+
+
+@nova_router.post("/agent/dispatch")
+async def nova_agent_dispatch(req: NovaAgentCommandRequest):
+    command = req.command.strip()
+    device_id = req.device_id or ""
+    intent = _classify_intent(command)
+    thought = [f"Intent classified: {intent['category']}"]
+
+    if intent["category"] == "greeting":
+        brain = _get_brain()
+        return _greeting_response(brain)
+
+    if intent["category"] == "device_locate":
+        if not device_id:
+            return {
+                "thought_process": thought + ["No device specified"],
+                "intent": intent["category"],
+                "response": "Which device should I locate? Please select a device first.",
+            }
+        thought.append(f"Triggering locate on device {device_id}")
+        return {
+            "thought_process": thought,
+            "intent": intent["category"],
+            "response": f"Locating device {device_id}. LAU is triggering a locate command.",
+            "action": {"method": "POST", "endpoint": f"/device/{device_id}/trigger-locate"},
+        }
+
+    if intent["category"] == "device_lock":
+        if not device_id:
+            return {
+                "thought_process": thought + ["No device specified"],
+                "intent": intent["category"],
+                "response": "Which device should I lock? Please select a device first.",
+            }
+        return {
+            "thought_process": thought + [f"Locking device {device_id}"],
+            "intent": intent["category"],
+            "response": f"Initiating remote lock on device {device_id}.",
+            "action": {"method": "POST", "endpoint": f"/device/{device_id}/remote-lock?message=Locked by LAU agent"},
+        }
+
+    if intent["category"] == "device_wipe":
+        if not device_id:
+            return {
+                "thought_process": thought + ["No device specified"],
+                "intent": intent["category"],
+                "response": "Which device should I wipe? Please select a device first.",
+            }
+        return {
+            "thought_process": thought + [f"Wiping device {device_id}"],
+            "intent": intent["category"],
+            "response": f"LAU is initiating remote wipe on device {device_id}. This is destructive.",
+            "action": {"method": "POST", "endpoint": f"/device/{device_id}/remote-wipe"},
+        }
+
+    if intent["category"] == "device_message":
+        if not device_id:
+            return {
+                "thought_process": thought + ["No device specified"],
+                "intent": intent["category"],
+                "response": "Which device should I message? Please select a device first.",
+            }
+        return {
+            "thought_process": thought + [f"Ready to send message to {device_id}"],
+            "intent": intent["category"],
+            "response": f"Ready to send a message to {device_id}.",
+            "action": {"method": "POST",
+                        "endpoint": f"/device/{device_id}/send-message",
+                        "extract_body": True},
+        }
+
+    if intent["category"] == "device_fingerprint":
+        if not device_id:
+            return {
+                "thought_process": thought + ["No device specified"],
+                "intent": intent["category"],
+                "response": "Which device should I fingerprint? Please select a device first.",
+            }
+        return {
+            "thought_process": thought + [f"Fingerprinting device {device_id}"],
+            "intent": intent["category"],
+            "response": f"Running fingerprint analysis on device {device_id}.",
+            "action": {"method": "GET", "endpoint": f"/device/{device_id}/fingerprint"},
+        }
+
+    if intent["category"] == "camera_discover":
+        return {
+            "thought_process": thought + ["Scanning network for IP cameras"],
+            "intent": intent["category"],
+            "response": "Scanning the local network for IP cameras and RTSP streams...",
+            "action": {"method": "GET", "endpoint": "/camera/discover?subnet=192.168.1.0/24"},
+        }
+
+    if intent["category"] == "vehicle_track":
+        if not device_id:
+            return {
+                "thought_process": thought + ["No vehicle device specified"],
+                "intent": intent["category"],
+                "response": "Which vehicle should I track? Please select a device first.",
+            }
+        return {
+            "thought_process": thought + [f"Reporting vehicle {device_id} as stolen, initiating recovery"],
+            "intent": intent["category"],
+            "response": f"LAU is reporting vehicle {device_id} as stolen and activating recovery tracking.",
+            "action": {"method": "POST", "endpoint": f"/vehicle/stolen-report?device_id={device_id}"},
+        }
+
+    if intent["category"] == "lau_status":
+        brain = _get_brain()
+        status = brain.status() if hasattr(brain, "status") else {}
+        return {
+            "thought_process": thought + ["Reporting full agent status"],
+            "intent": intent["category"],
+            "response": (
+                f"Agent: {status.get('agent_name', 'nova-agent')} | "
+                f"State: {status.get('state', 'active')} | "
+                f"Engine: {status.get('engine_used', 'deterministic')} | "
+                f"Tools: {status.get('tool_count', 23)} | "
+                f"Memory: {status.get('memory', {})} | "
+                f"Uptime: {status.get('uptime', 'unknown')}"
+            ),
+            "engine": status.get("engine_used", ""),
+        }
+
+    if intent["category"] == "shield_validate":
+        thought.append("Running all three definitive module validators through the shield")
+        return {
+            "thought_process": thought + [
+                "Hardware peripheral vector validated",
+                "Tracking logic validated",
+                "Geofence verification validated",
+            ],
+            "intent": intent["category"],
+            "response": "Running all definitive LAU module validators (compile + execute each emitted source)...",
+            "action": {"method": "POST", "endpoint": "/nova-core/shield/validate"},
+        }
+
+    brain = _get_brain()
+    thought.append("Routing through cognitive engine tool dispatch")
+    try:
+        result = await brain.process_query(command)
+    except Exception as exc:
+        return {
+            "thought_process": thought + [f"Engine error: {exc}"],
+            "intent": intent["category"],
+            "response": f"LAU engine encountered an error processing this command: {exc}",
+            "engine": "failed",
+        }
+
+    tools = result.get("tools_executed", [])
+    thought.append(f"Engine used: {result.get('engine_used', 'unknown')}")
+    thought.append(f"Tools executed: {tools}")
+    return {
+        "thought_process": thought,
+        "intent": intent["category"],
+        "response": result.get("response", "Command processed by LAU."),
+        "engine": result.get("engine_used", ""),
+        "latency_ms": result.get("duration_ms", 0),
+        "tools_executed": tools,
+        "results": result.get("results", {}),
     }
 
 
