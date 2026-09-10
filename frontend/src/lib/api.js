@@ -20,7 +20,7 @@ export function getAuthToken() {
   return authToken;
 }
 
-async function request(path, options = {}) {
+export async function request(path, options = {}) {
   const headers = {
     "Content-Type": "application/json",
     ...(options.headers || {}),
@@ -64,7 +64,7 @@ export const api = {
   },
   observatory: () => request("/observatory/summary"),
   novaEngineStatus: () => request("/nova-core/engine/status"),
-  novaEngineInit: (force = false) => request("/nova-core/engine/init", { method: "POST", body: JSON.stringify({ force }) }),
+  novaEngineInit: (force = false) => request(`/nova-core/engine/init?force=${force}`, { method: "POST" }),
   novaTelemetryVerify: (packet) => request("/nova-core/telemetry/verify", { method: "POST", body: JSON.stringify({ packet }) }),
   novaQuery: (query) => request("/nova-core/query", { method: "POST", body: JSON.stringify({ query }) }),
   novaShieldValidate: () => request("/nova-core/shield/validate", { method: "POST" }),

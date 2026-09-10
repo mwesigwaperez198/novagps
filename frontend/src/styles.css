@@ -2670,6 +2670,23 @@ select {
   font-size: 9px;
 }
 
+.lau-action-execute {
+  margin-left: auto;
+  padding: 2px 8px;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--accent);
+  font-size: 9px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s;
+}
+.lau-action-execute:hover {
+  background: var(--accent);
+  color: #000;
+}
+
 .lau-input-bar {
   display: flex;
   gap: 6px;

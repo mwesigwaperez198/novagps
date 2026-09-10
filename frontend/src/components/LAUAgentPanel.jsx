@@ -4,7 +4,7 @@ import {
   Network, Radio, ScanLine, Send, ShieldCheck, ShieldAlert,
   Truck, Unlock, Wifi, Zap,
 } from "lucide-react";
-import { api } from "../lib/api.js";
+import { api, request } from "../lib/api.js";
 
 const QUICK_ACTIONS = [
   { id: "health", label: "System Health", icon: Zap, command: "analyze system health and status" },
@@ -30,7 +30,7 @@ function ThoughtStep({ index, text }) {
   );
 }
 
-function ActionResult({ result }) {
+function ActionResult({ result, onExecuteAction }) {
   if (!result) return null;
   const intent = result.intent || "unknown";
   const action = result.action;
@@ -83,6 +83,13 @@ function ActionResult({ result }) {
         <div className="lau-result-action">
           <span className="lau-action-badge">{action.method}</span>
           <code>{action.endpoint}</code>
+          <button
+            className="lau-action-execute"
+            onClick={() => onExecuteAction(action)}
+            type="button"
+          >
+            Execute
+          </button>
         </div>
       )}
     </div>
@@ -127,6 +134,38 @@ export default function LAUAgentPanel() {
     } finally {
       setLoading(false);
       inputRef.current?.focus();
+    }
+  }
+
+  async function executeAction(action) {
+    if (!action || !action.endpoint) return;
+    setLoading(true);
+    try {
+      const isGet = action.method === "GET";
+      const opts = isGet ? {} : { method: action.method };
+      const data = await request(action.endpoint, opts);
+      setHistory((h) => [...h, {
+        id: Date.now(),
+        role: "lau",
+        result: {
+          intent: "action_result",
+          response: `Action executed: ${action.method} ${action.endpoint}`,
+          thought_process: [`Executed ${action.method} ${action.endpoint}`, "Action completed successfully"],
+          results: { response: data },
+        },
+      }]);
+    } catch (err) {
+      setHistory((h) => [...h, {
+        id: Date.now(),
+        role: "lau",
+        result: {
+          intent: "action_error",
+          response: `Action failed: ${err.message}`,
+          thought_process: [`Tried ${action.method} ${action.endpoint}`, `Error: ${err.message}`],
+        },
+      }]);
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -183,7 +222,7 @@ export default function LAUAgentPanel() {
             {entry.role === "user" ? (
               <div className="lau-msg-user-bubble">{entry.text}</div>
             ) : (
-              <ActionResult result={entry.result} />
+              <ActionResult result={entry.result} onExecuteAction={executeAction} />
             )}
           </div>
         ))}

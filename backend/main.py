@@ -2469,6 +2469,10 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 _frontend_dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 
+import logging as _nova_logging
+
+_nova_log = _nova_logging.getLogger("nova_core")
+
 try:
     import sys as _sys
     _nova_core_path = Path(__file__).resolve().parent.parent
@@ -2476,6 +2480,7 @@ try:
         _sys.path.insert(0, str(_nova_core_path))
     from nova_core.routes import register_nova_routes
     register_nova_routes(app)
+    _nova_log.info("nova-core routes registered")
 
     from nova_core.engine import get_engine
     get_engine().start_async()
@@ -2484,8 +2489,8 @@ try:
     if get_config().watch_enabled:
         from nova_core.watcher import NovaWatcher
         NovaWatcher().start_async()
-except Exception:
-    pass
+except Exception as _nova_exc:
+    _nova_log.warning("nova-core init failed (non-fatal): %s", _nova_exc)
 
 if _frontend_dist.is_dir():
     from fastapi.staticfiles import StaticFiles
