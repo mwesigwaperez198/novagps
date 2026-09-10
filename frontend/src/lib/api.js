@@ -67,6 +67,8 @@ export const api = {
   novaEngineInit: (force = false) => request("/nova-core/engine/init", { method: "POST", body: JSON.stringify({ force }) }),
   novaTelemetryVerify: (packet) => request("/nova-core/telemetry/verify", { method: "POST", body: JSON.stringify({ packet }) }),
   novaQuery: (query) => request("/nova-core/query", { method: "POST", body: JSON.stringify({ query }) }),
+  novaShieldValidate: () => request("/nova-core/shield/validate", { method: "POST" }),
+  novaShieldEmit: (prompt) => request("/nova-core/shield/emit", { method: "POST", body: JSON.stringify({ prompt }) }),
   cameraDiscover: (subnet) => request(`/camera/discover?subnet=${encodeURIComponent(subnet)}`),
   cameraScreenshot: (rtspUrl) => request(`/camera/screenshot?rtsp_url=${encodeURIComponent(rtspUrl)}`),
   cameraRecord: (rtspUrl, duration = 30) => request(`/camera/record?rtsp_url=${encodeURIComponent(rtspUrl)}&duration=${duration}`, { method: "POST" }),

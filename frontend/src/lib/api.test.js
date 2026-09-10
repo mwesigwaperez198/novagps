@@ -169,4 +169,31 @@ describe("api.js", () => {
     const callHeaders = mockFetch.mock.calls[0][1].headers;
     expect(callHeaders["Authorization"]).toBe("Bearer test-bearer");
   });
+
+  it("novaShieldValidate posts to shield validate", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ passed: true, lanes: [] }),
+    });
+    const { api } = await import("./api.js");
+    const result = await api.novaShieldValidate();
+    expect(result.passed).toBe(true);
+    expect(mockFetch).toHaveBeenCalledWith(
+      expect.stringContaining("/nova-core/shield/validate"),
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("novaShieldEmit posts prompt to shield emit", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ action_enforced: "EMIT_GEOFENCE_NMEA_NEUTRALIZING_FILTER", source: "import json" }),
+    });
+    const { api } = await import("./api.js");
+    const result = await api.novaShieldEmit("corrupted $GPRMC racing the geofence layer");
+    expect(result.action_enforced).toBe("EMIT_GEOFENCE_NMEA_NEUTRALIZING_FILTER");
+    const [, options] = mockFetch.mock.calls[0];
+    expect(options.method).toBe("POST");
+    expect(JSON.parse(options.body).prompt).toContain("$GPRMC");
+  });
 });

@@ -19,6 +19,7 @@ import IDSPanel from "./components/IDSPanel.jsx";
 import LiveMap from "./components/LiveMap.jsx";
 import LoginScreen from "./components/LoginScreen.jsx";
 import LogsPanel from "./components/LogsPanel.jsx";
+import LAUShieldPanel from "./components/LAUShieldPanel.jsx";
 import NearbyScanPanel from "./components/NearbyScanPanel.jsx";
 import ObservatoryPanel from "./components/ObservatoryPanel.jsx";
 import OSINTPanel from "./components/OSINTPanel.jsx";
@@ -57,6 +58,7 @@ const PANEL_TABS = [
   { id: "discovery", label: "DISC" },
   { id: "net", label: "NET" },
   { id: "observatory", label: "OBS" },
+  { id: "shield", label: "SHLD" },
   { id: "wifi", label: "WIFI" },
   { id: "firmware", label: "FW" },
   { id: "vehicle", label: "VHC" },
@@ -357,6 +359,7 @@ export default function App() {
             {activePanel === "fingerprint" && <FingerprintPanel device={selectedDevice} />}
             {activePanel === "discovery" && <DiscoveryPanel device={selectedDevice} />}
             {activePanel === "observatory" && <ObservatoryPanel />}
+            {activePanel === "shield" && <LAUShieldPanel />}
             {activePanel === "net" && <NearbyScanPanel device={selectedDevice} onResults={(data) => setNearby(data)} />}
             {activePanel === "wifi" && <WifiPanel />}
             {activePanel === "firmware" && <FirmwarePanel device={selectedDevice} />}

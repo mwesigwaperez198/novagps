@@ -2280,3 +2280,93 @@ select {
   font-size: 10px;
   line-height: 1.5;
 }
+
+/* LAU Shield panel */
+.toolbar-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.shld-lane {
+  border-left: 2px solid var(--cyan);
+}
+
+.shld-lane-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.shld-lane-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.shld-lane-title .muted {
+  font-weight: 400;
+}
+
+.alert-badges {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.shld-badge {
+  display: inline-block;
+  padding: 2px 6px;
+  font-size: 9px;
+  border: 1px solid var(--cyan);
+  border-radius: 3px;
+  color: var(--cyan);
+  background: rgba(64, 215, 255, 0.08);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.shld-badge.warn {
+  border-color: var(--amber);
+  color: var(--amber);
+  background: rgba(230, 211, 108, 0.08);
+}
+
+.shld-badge.critical {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: rgba(255, 95, 109, 0.08);
+}
+
+.shld-matrix {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+
+.shld-source {
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 9px;
+}
+
+.shld-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.shld-prompt {
+  width: 100%;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 11px;
+}
