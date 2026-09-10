@@ -85,6 +85,14 @@ class NovaDeterministicShield:
             r"|bind.{0,15}(?:socket|media)|\bpid\b.{0,25}bind|unauthorized.{0,12}pid",
             re.IGNORECASE,
         )
+        self.osint_intent = re.compile(
+            r"osint|open.{0,15}source.{0,20}(?:intel|intelligence|footprint|profile|collect)"
+            r"|intelligence.{0,20}(?:aggregat|collect|autom)|sub-?domain.{0,25}cluster"
+            r"|dns.{0,20}(?:footprint|enumerat|trace|resolv)|public.{0,15}dns"
+            r"|certificate.{0,20}transparency|cert.{0,15}(?:ificate\s*)?log|ct.{0,15}(?:log|precert)"
+            r"|tracking.{0,15}matrix|token.{0,15}optim|attack.{0,10}surface|infrastructur.{0,15}(?:map|surface)",
+            re.IGNORECASE,
+        )
 
     def scan_input(self, task_input: str) -> list:
         normalized = str(task_input)
@@ -354,10 +362,124 @@ class NovaDeterministicShield:
             "    print('fd_audit:', fd_audit({'capture-daemon': {3: '/dev/video0'}, 'spawned-httpd': {7: '/dev/media0'}}))\n"
         )
 
+    def _osint_collection_source(self) -> str:
+        return (
+            "# NOVA-CORE OSINT collection core - passive-public sources only, fully local.\n"
+            "import json\n"
+            "\n"
+            "# --- pluggable collectors (sandbox-seeded rows; live mode swaps each probe) ---\n"
+            "DNS = {\n"
+            "    'target.example':       {'A': '203.0.113.10', 'AAAA': '2001:db8::10', 'CNAME': None,\n"
+            "                             'MX': ['mx1.target.example'], 'NS': ['ns1.target.example'], 'TXT': ['v=spf1 -all']},\n"
+            "    'api.target.example':   {'A': '203.0.113.10', 'AAAA': '2001:db8::10', 'CNAME': None,\n"
+            "                             'MX': [], 'NS': [], 'TXT': []},\n"
+            "    'admin.target.example': {'A': '198.51.100.7', 'AAAA': None, 'CNAME': 'lb.cloudflare.net',\n"
+            "                             'MX': [], 'NS': ['ns2.cloudflare.com'], 'TXT': ['_gitlab-pages']},\n"
+            "    'mail.target.example':  {'A': '203.0.113.20', 'AAAA': None, 'CNAME': None,\n"
+            "                             'MX': ['aspmx.target.example'], 'NS': ['ns1.target.example'], 'TXT': ['v=spf1 include:_spf.self -all']},\n"
+            "    'vpn.target.example':   {'A': '198.51.100.9', 'AAAA': None, 'CNAME': None,\n"
+            "                             'MX': [], 'NS': [], 'TXT': []},\n"
+            "    'dev.target.example':   {'A': '192.0.2.44', 'AAAA': '2001:db8::44', 'CNAME': None,\n"
+            "                             'MX': [], 'NS': [], 'TXT': []},\n"
+            "}\n"
+            "# Certificate transparency log sample: cn, SAN set, issuer, validity window.\n"
+            "CT_LOG = [\n"
+            "    {'cn': 'target.example', 'san': ('target.example', 'api.target.example', 'mail.target.example'),\n"
+            "     'issuer': 'R3', 'nb': '2025-02-01', 'na': '2026-02-01'},\n"
+            "    {'cn': '*.target.example', 'san': ('admin.target.example', 'vpn.target.example'),\n"
+            "     'issuer': 'GTS', 'nb': '2025-06-15', 'na': '2025-09-13'},\n"
+            "    {'cn': 'dev.target.example', 'san': ('dev.target.example',),\n"
+            "     'issuer': 'LE', 'nb': '2025-08-01', 'na': '2025-10-30'},\n"
+            "]\n"
+            "\n"
+            "def dns_trace(name):\n"
+            "    # Resolver shim. Live mode: dnspython A/AAAA/CNAME/MX/NS/TXT lookup against public resolvers.\n"
+            "    return DNS.get(name, {})\n"
+            "\n"
+            "def ct_eval(name):\n"
+            "    # CT log miner. Live mode: crt.sh/certspotter precert query, dedupe by issuer+window.\n"
+            "    return [('CT:%s' % c['issuer'], c['nb']) for c in CT_LOG if name in c['san']]\n"
+            "\n"
+            "def footprint(name):\n"
+            "    rows = []\n"
+            "    for rec in ('A', 'AAAA', 'CNAME', 'MX', 'NS', 'TXT'):\n"
+            "        v = dns_trace(name).get(rec)\n"
+            "        if v is None:\n"
+            "            continue\n"
+            "        if isinstance(v, (list, tuple)):\n"
+            "            rows += [(rec, a) for a in v]\n"
+            "        else:\n"
+            "            rows.append((rec, v))\n"
+            "    rows += ct_eval(name)\n"
+            "    return rows\n"
+            "\n"
+            "def build_matrix(cluster):\n"
+            "    # Single token-optimized tracking matrix: one compact row per subdomain.\n"
+            "    out = []\n"
+            "    for host in cluster:\n"
+            "        rows = footprint(host)\n"
+            "        a = ','.join(sorted(x[1] for x in rows if x[0] == 'A'))\n"
+            "        ct = sorted(set(x[1].split(':')[0] for x in rows if x[0].startswith('CT')))\n"
+            "        edges = ','.join(dict.fromkeys(x[0] for x in rows))\n"
+            "        out.append({'h': host, 'ip': a, 'ct': ct, 'edge': edges})\n"
+            "    return out\n"
+            "\n"
+            "def attack_surface(matrix):\n"
+            "    # Collapse hosts into infra groups: shared origin IP = one zone; CT issuer stages hosts.\n"
+            "    by_ip = {}\n"
+            "    for m in matrix:\n"
+            "        by_ip.setdefault(m['ip'], []).append(m['h'])\n"
+            "    surf = []\n"
+            "    for ip, hosts in sorted(by_ip.items()):\n"
+            "        tags = set()\n"
+            "        for h in hosts:\n"
+            "            r = DNS.get(h, {})\n"
+            "            if r.get('CNAME'):\n"
+            "                tags.add('cdn/forward')\n"
+            "            if r.get('MX'):\n"
+            "                tags.add('mx')\n"
+            "            if r.get('NS'):\n"
+            "                tags.add('authoritative')\n"
+            "        surf.append({'origin': ip, 'hosts': ','.join(sorted(hosts)), 'tags': sorted(tags)})\n"
+            "    return surf\n"
+            "\n"
+            "if __name__ == '__main__':\n"
+            "    cluster = ['target.example', 'api.target.example', 'admin.target.example',\n"
+            "               'mail.target.example', 'vpn.target.example', 'dev.target.example']\n"
+            "    matrix = build_matrix(cluster)\n"
+            "    print('--- TOKEN-OPTIMIZED TRACKING MATRIX (one compact row per subdomain) ---')\n"
+            "    for m in matrix:\n"
+            "        print(json.dumps(m, sort_keys=True))\n"
+            "    compact = json.dumps(matrix, sort_keys=True)\n"
+            "    verbose = json.dumps(matrix, sort_keys=True, indent=2)\n"
+            "    print('--- token budget: compact=%dB verbose=%dB saved=%dB ---' % (len(compact), len(verbose), len(verbose) - len(compact)))\n"
+            "    print('--- INFRASTRUCTURE ATTACK-SURFACE MAP ---')\n"
+            "    for s in attack_surface(matrix):\n"
+            "        print(json.dumps(s, sort_keys=True))\n"
+        )
+
     def _engineering_response(self, task_input: str) -> dict:
         start = time.time()
         logger.info("[SHIELD] Engineering intent detected — emitting raw-socket plan.")
-        if self.hardware_intent.search(str(task_input)):
+        if self.osint_intent.search(str(task_input)):
+            source = self._osint_collection_source()
+            action = "EMIT_OSINT_MATRIX_FRAMEWORK"
+            verdict = "ENGINEERING_SPEC_GENERATED"
+            directives = [
+                "connect_only_public_sources",
+                "dns_zone_enumeration",
+                "parse_cert_transparency",
+                "token_compact_matrix",
+                "dedupe_origins",
+                "mark_passive_sources_only",
+            ]
+            steptruth = {
+                "Telemetric Baseline": "Local framework over public namespaces only: an arbitrary subdomain cluster list drives DNS footprint tracing (A/AAAA/CNAME/MX/NS/TXT) and certificate transparency (CT) log mining; zero credentials, zero intrusion.",
+                "Constraint Isolation": "Resolver answers and CT precerts (cn/SAN/issuer/validity window) are the only inputs; CT logs are append-only Merkle trees and DNS zones are delegated trees, so the engine can only assert public delegation + issued-cert reality.",
+                "Exploitation / Adaptation Vector": "Each subdomain resolves to origin IPs; CT SAN entries leak staging hosts on the same cluster; CNAME chains collapse into real forwarding edges - the shared-origin union is the attack surface.",
+                "Defensive Delta / Execution Steps": "EMIT_OSINT_MATRIX_FRAMEWORK - token-optimized matrix rows per host, surface aggregation keyed on origin/issuer, sources flagged passive-public-only.",
+            }
+        elif self.hardware_intent.search(str(task_input)):
             source = self._peripheral_defense_source()
             action = "EMIT_PERIPHERAL_GUARD_DAEMON"
             verdict = "ENGINEERING_SPEC_GENERATED"
@@ -490,7 +612,7 @@ class NovaDeterministicShield:
                     "response": fallback_output,
                 },
             }
-        elif self.coord_intent.search(str(task_input)) or self.hardware_intent.search(str(task_input)) or self.engineering_intent.search(str(task_input)):
+        elif self.coord_intent.search(str(task_input)) or self.hardware_intent.search(str(task_input)) or self.osint_intent.search(str(task_input)) or self.engineering_intent.search(str(task_input)):
             return self._engineering_response(task_input)
         else:
             verdict = "NOMINAL_ENVIRONMENTAL_LOGIC_PASS"
