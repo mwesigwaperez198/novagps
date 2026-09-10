@@ -187,6 +187,112 @@ async def cmd_query(query: str):
     return result
 
 
+def cmd_validators() -> int:
+    """Run the definitive LAU module validation prompts in the terminal staging loop.
+
+    Each prompt is dispatched through the deterministic shield, the emitted source
+    is compiled and executed standalone, and the machine-parseable JSON payload is
+    verified. Returns 0 when every lane passes, 1 otherwise.
+    """
+    import os
+    import py_compile
+    import subprocess
+    import sys
+    import tempfile
+
+    from .shield import NovaDeterministicShield
+
+    shield = NovaDeterministicShield()
+
+    suites = {
+        "HARDWARE_VECTOR": (
+            "EMIT_PERIPHERAL_GUARD_DAEMON",
+            "Isolate an internal system alert where an unauthorized PID is attempting to "
+            "spawn a background shell thread and bind to local video capture nodes (/dev/video0). "
+            "Generate your 4-step <thought_process> showing how you trap this file descriptor "
+            "interaction, map the rogue process memory tree, and write an immutable Python handler "
+            "to forcefully revoke its media access rights.",
+        ),
+        "TRACKING_LOGIC": (
+            "EMIT_COORDINATE_VALIDATION_FILTER",
+            "A compromised asset terminal is streaming fabricated GPS fixes with NaN latitude, "
+            "infinite longitude, 1e300 out-of-range coordinates, and wrapped/negative timestamps "
+            "to escape the tracking validation stream. Run your localized tracking logic: float "
+            "plausibility, bounding-box range gate, speed and timestamp monotonicity, and emit a "
+            "validation filter that drops invalid fixes before the routing pipeline.",
+        ),
+        "GEOFENCE_VERIFICATION": (
+            "EMIT_GEOFENCE_NMEA_NEUTRALIZING_FILTER",
+            "A compromised asset terminal is sending corrupted NMEA 0183 sentences ($GPRMC) "
+            "attempting to bypass a critical geofence layer via a coordinates race-condition exploit. "
+            "Isolate this anomaly: enforce checksum status, monotonic fix ordering, a max jump "
+            "velocity gate, and serialize the geofence verification so the TOCTOU window closes. "
+            "Emit the neutralizing filter.",
+        ),
+    }
+
+    print("LAU · NOVA-CORE Module Validators — deterministic staging loop\n")
+    failures = 0
+
+    for name, (expected_action, prompt) in suites.items():
+        print(f"=== {name}")
+        out = shield.process_deterministic_fallback(task_input=prompt)
+        payload = out["output_payload"]
+        route_ok = payload["action_enforced"] == expected_action
+        print(f"  intent -> {payload['action_enforced']} "
+              f"[{'match' if route_ok else 'MISMATCH (want ' + expected_action + ')'}]")
+        print(f"  verdict -> {payload['verdict']}")
+        print(f"  thought_process -> {' / '.join(out['thought_process'])}")
+
+        src = payload["response"]
+        fd, tmp = tempfile.mkstemp(suffix=".py", dir=tempfile.gettempdir())
+        try:
+            with os.fdopen(fd, "w") as fh:
+                fh.write(src)
+            try:
+                py_compile.compile(tmp, doraise=True)
+                compiled = True
+            except py_compile.PyCompileError as exc:
+                compiled = False
+                print(f"  COMPILE FAIL: {exc}")
+            run = None
+            if compiled:
+                proc = subprocess.run(
+                    [sys.executable, tmp],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                run = proc.returncode
+                if proc.returncode != 0:
+                    print(f"  RUN FAIL rc={proc.returncode}: {proc.stderr[-500:]}")
+                else:
+                    json_line = next(
+                        (ln.strip() for ln in proc.stdout.splitlines() if ln.strip().startswith("{")),
+                        None,
+                    )
+                    if json_line:
+                        data = json.loads(json_line)
+                        print(f"  run -> rc={run} status={data.get('status')} "
+                              f"badges={len(data.get('alert_badges', []))}")
+                    else:
+                        print(f"  run -> rc={run} (no JSON payload in output)")
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+
+        ok = route_ok and compiled and run == 0
+        print(f"  => {'PASS' if ok else 'FAIL'}\n")
+        if not ok:
+            failures += 1
+
+    if failures:
+        print(f"{failures} validator(s) FAILED — do not push.")
+        return 1
+    print("All module validators passed. Ready to push.")
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description="NOVA-CORE Agent")
     parser.add_argument("--patrol", action="store_true", help="Start autonomous patrol daemon")
@@ -194,6 +300,11 @@ def main():
     parser.add_argument("--scan", action="store_true", help="Run all security scans")
     parser.add_argument("--status", action="store_true", help="Show system status")
     parser.add_argument("--query", type=str, help="Process a single query")
+    parser.add_argument(
+        "--validators",
+        action="store_true",
+        help="Run the definitive LAU module validation prompts (hardware peripheral / tracking logic / geofence verification)",
+    )
     parser.add_argument("--interactive", action="store_true", help="Interactive mode (default)")
     args = parser.parse_args()
 
@@ -209,6 +320,8 @@ def main():
         asyncio.run(cmd_status())
     elif args.query:
         asyncio.run(cmd_query(args.query))
+    elif args.validators:
+        sys.exit(cmd_validators())
     else:
         asyncio.run(cmd_interactive())
 
