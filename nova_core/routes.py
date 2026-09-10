@@ -45,17 +45,55 @@ class NovaQueryResponse(BaseModel):
 _agent_start_time = time.time()
 
 
-def _get_brain():
-    nova_core_path = Path(__file__).resolve().parent.parent
-    if str(nova_core_path) not in sys.path:
-        sys.path.insert(0, str(nova_core_path))
+_brain_instance = None
+_brain_init_error = None
 
-    from nova_core.brain import NovaBrain
-    return NovaBrain()
+
+def _get_brain():
+    global _brain_instance, _brain_init_error
+    if _brain_instance is not None:
+        return _brain_instance
+    if _brain_init_error is not None:
+        raise RuntimeError(_brain_init_error)
+
+    nova_core_path = Path(__file__).resolve().parent
+    grandparent = nova_core_path.parent
+    for _candidate in (nova_core_path, grandparent):
+        if (_candidate / "nova_core" / "brain.py").exists():
+            if str(_candidate) not in sys.path:
+                sys.path.insert(0, str(_candidate))
+            break
+
+    try:
+        from nova_core.brain import NovaBrain
+        _brain_instance = NovaBrain()
+        return _brain_instance
+    except Exception as exc:
+        _brain_init_error = str(exc)
+        raise
+
+
+@nova_router.get("/health")
+async def nova_health():
+    return {
+        "status": "ok",
+        "module": "nova-core",
+        "brain_ready": _brain_instance is not None,
+        "brain_error": _brain_init_error,
+    }
 
 
 @nova_router.get("/status")
 async def nova_status():
+    if _brain_init_error:
+        return {
+            "agent": "LAU",
+            "agent_version": "0.1.0",
+            "codename": "LAU",
+            "state": "initializing",
+            "init_error": _brain_init_error,
+            "uptime_seconds": round(time.time() - _agent_start_time, 2),
+        }
     brain = _get_brain()
     from nova_core.config import get_config
     stats = brain.memory.get_memory_stats()
@@ -464,8 +502,21 @@ async def nova_agent_dispatch(req: NovaAgentCommandRequest):
     thought = [f"Intent classified: {intent['category']}"]
 
     if intent["category"] == "greeting":
-        brain = _get_brain()
-        return _greeting_response(brain)
+        try:
+            brain = _get_brain()
+            return _greeting_response(brain)
+        except Exception:
+            return {
+                "thought_process": ["Greeting detected", "Brain initializing"],
+                "intent": "greeting",
+                "response": (
+                    "I am LAU, the queen agent of this system. "
+                    "My brain is initializing — I can still run deterministic "
+                    "validators, scans, and device commands. "
+                    "Ask me to scan, track, protect, or analyze anything."
+                ),
+                "engine": "initializing",
+            }
 
     if intent["category"] == "device_locate":
         if not device_id:
@@ -592,7 +643,15 @@ async def nova_agent_dispatch(req: NovaAgentCommandRequest):
             "action": {"method": "POST", "endpoint": "/nova-core/shield/validate"},
         }
 
-    brain = _get_brain()
+    try:
+        brain = _get_brain()
+    except Exception as exc:
+        return {
+            "thought_process": thought + [f"Brain init failed: {exc}"],
+            "intent": intent["category"],
+            "response": f"LAU brain is initializing. Please try again in a moment. Error: {exc}",
+            "engine": "initializing",
+        }
     thought.append("Routing through cognitive engine tool dispatch")
     try:
         result = await brain.process_query(command)
