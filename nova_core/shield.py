@@ -73,6 +73,16 @@ class NovaDeterministicShield:
             r"|validator|validation.{0,15}(script|stream|gate|router)|drop.{0,25}invalid",
             re.IGNORECASE,
         )
+        self.hardware_intent = re.compile(
+            r"peripheral.{0,25}(driver|hijack|intercept)|driver.{0,20}(?:hijack|corrupt|hook)"
+            r"|media.{0,25}(?:interface|camera)|camera.{0,30}(?:interface|feed|device)"
+            r"|signal.{0,20}bridge|bridge.{0,15}interface|attached.{0,20}media"
+            r"|memory.{0,25}pointer.{0,25}(?:corrupt|overwrite)|pointer.{0,20}corrupt"
+            r"|(?:device\s*)?file.{0,20}(?:descriptor|fd)|/dev/(?:video|media|ttyS|ttyUSB|spidev|i2c)"
+            r"|ioctl|(?:dev_)?fops|kprobe|uprobe|eBPF|bpf_(?:prog|attach)|unauthorized.{0,20}hook"
+            r"|block.{0,15}(?:hooks?|intercepts)|daemon.{0,20}(?:blueprint|monitor)|monitor.{0,20}(?:device|fd)",
+            re.IGNORECASE,
+        )
 
     def scan_input(self, task_input: str) -> list:
         normalized = str(task_input)
@@ -226,10 +236,108 @@ class NovaDeterministicShield:
             "        print(name, '->', 'ACCEPT' if r['accepted'] else 'DROP', r.get('reason') or ('fence inside=' + str(r['inside'])))\n"
         )
 
+    def _peripheral_defense_source(self) -> str:
+        return (
+            "import hashlib, os\n\n"
+            "# Peripheral-guard daemon blueprint. No external devices required: the\n"
+            "# node table can be seeded synthetically and every gate is provable locally.\n"
+            "TRUSTED_HOLDERS = ('capture-daemon', 'tracker-app', 'systemd')\n"
+            "PROTECTED_GLOB = ('video', 'ttyS', 'ttyUSB', 'media', 'v4l', 'spidev', 'i2c-', 'ACM')\n\n"
+            "def _stat_of(path):\n"
+            "    try:\n"
+            "        return os.stat(path)\n"
+            "    except OSError:\n"
+            "        h = hashlib.sha256(path.encode()).digest()\n"
+            "        class Fake: pass\n"
+            "        s = Fake()\n"
+            "        s.st_dev = int.from_bytes(h[:4], 'big') % 65536\n"
+            "        s.st_ino = int.from_bytes(h[4:8], 'big')\n"
+            "        s.st_mode = 0o100600; s.st_uid = 0; s.st_gid = 0\n"
+            "        return s\n\n"
+            "def node_signature(path):\n"
+            "    # cdev identity: dev, inode, mode, owner. A driver rebind or a swapped\n"
+            "    # file_operations table rotates ino/dev; mode/owner deltas flag chmod-away\n"
+            "    # protection holes used to widen the fd to other holders.\n"
+            "    st = _stat_of(path)\n"
+            "    return '%x:%x:%o:%d:%d' % (st.st_dev, st.st_ino, st.st_mode, st.st_uid, st.st_gid)\n\n"
+            "def scan_for_rotation(trusted):\n"
+            "    # Snapshot at boot, verify each cycle. Any delta off baseline = node was\n"
+            "    # unbound/rebound (the classic unbind-then-bind driver swap) or media\n"
+            "    # controller rotation on the same /dev name.\n"
+            "    alerts = []\n"
+            "    for path, base in trusted.items():\n"
+            "        cur = node_signature(path)\n"
+            "        if cur != base:\n"
+            "            alerts.append((path, 'NODE_ROTATED %s -> %s' % (base, cur)))\n"
+            "    return alerts\n\n"
+            "def gate_open(owner, device, allowlist=TRUSTED_HOLDERS):\n"
+            "    # fanotify FAN_OPEN_PERM equivalent: veto the open BEFORE the driver sees\n"
+            "    # a byte, so descriptor theft and O_* hook attempts never materialize.\n"
+            "    if owner in allowlist:\n"
+            "        return 'ALLOW', 'trusted interface owner'\n"
+            "    node = os.path.basename(device)\n"
+            "    if node.startswith(PROTECTED_GLOB):\n"
+            "        return 'DENY', 'unauthorized hook on %s blocked' % device\n"
+            "    return 'ALLOW', 'non-peripheral node'\n\n"
+            "def fd_audit(entries):\n"
+            "    # {pid: {fd: path}} -> protected descriptors outside the allowlist are\n"
+            "    # pointer-steal odds; the same node open by two pids is descriptor dupe.\n"
+            "    flags = []\n"
+            "    owners = {}\n"
+            "    for pid, fds in entries.items():\n"
+            "        for fd, path in fds.items():\n"
+            "            if os.path.basename(path).startswith(PROTECTED_GLOB):\n"
+            "                owners.setdefault(path, []).append((pid, int(fd)))\n"
+            "    for path, fdlist in owners.items():\n"
+            "        if len(set(p for p, _ in fdlist)) > 1:\n"
+            "            flags.append(('ALERT', 'fd dup across %r -> %s' % (fdlist, path)))\n"
+            "    for pid, fds in entries.items():\n"
+            "        if pid in TRUSTED_HOLDERS:\n"
+            "            continue\n"
+            "        for fd, path in fds.items():\n"
+            "            if os.path.basename(path).startswith(PROTECTED_GLOB):\n"
+            "                flags.append(('DENY', 'fd %s in %s on %s' % (fd, pid, path)))\n"
+            "    return flags\n\n"
+            "# Persistent kernel-side hooking (the eBPF/LSM leg) is stubbed here: real\n"
+            "# deployments re-apply a bpf_lsm file_permission program that calls gate_open\n"
+            "# in-kernel, and an inotify watch on /sys/bus/*/drivers/*/{bind,unbind} that\n"
+            "# triggers scan_for_rotation on rebind.\n\n"
+            "if __name__ == '__main__':\n"
+            "    print('--- gate_open (fanotify equivalent) ---')\n"
+            "    for dev, owner in [('video0', 'capture-daemon'), ('video0', 'spawned-httpd'),\n"
+            "                      ('ttyS0', 'tracker-app'), ('media0', 'kjournald')]:\n"
+            "        print('%-8s %-16s -> %s %s' % ((dev, owner) + gate_open(owner, '/dev/' + dev)))\n"
+            "    print('--- node signature baseline & rotation ---')\n"
+            "    base = {('/dev/video0', node_signature('/dev/video0')), ('/dev/media0', node_signature('/dev/media0'))}\n"
+            "    trusted = dict(base)\n"
+            "    print('baseline:', trusted)\n"
+            "    print('rotation:', scan_for_rotation(dict(trusted, **{'/dev/video0': 'ATKER_OPS'})))\n"
+            "    print('--- fd_audit (descriptor theft / dup) ---')\n"
+            "    print(fd_audit({'capture-daemon': {3: '/dev/video0'}, 'spawned-httpd': {7: '/dev/media0'}}))\n"
+        )
+
     def _engineering_response(self, task_input: str) -> dict:
         start = time.time()
         logger.info("[SHIELD] Engineering intent detected — emitting raw-socket plan.")
-        if self.coord_intent.search(str(task_input)):
+        if self.hardware_intent.search(str(task_input)):
+            source = self._peripheral_defense_source()
+            action = "EMIT_PERIPHERAL_GUARD_DAEMON"
+            verdict = "ENGINEERING_SPEC_GENERATED"
+            directives = [
+                "snapshot_cdev_baseline",
+                "watch_sysfs_bind_events",
+                "deny_unauthorized_fds",
+                "audit_dup_descriptors",
+                "allowlist_only_openers",
+                "log_hook_attempts",
+            ]
+            steptruth = {
+                "Telemetric Baseline": "Attached media/camera interfaces and signal bridges surface as cdev nodes (/dev/video*, /dev/media*, UART/SPI/I2C, ACM bridges).",
+                "Constraint Isolation": "VFS syscall -> dentry -> inode -> file_operations reaches the driver through a function-pointer table in kernel memory; fops is write-once from user space unless memory is corrupted.",
+                "Exploitation / Adaptation Vector": "UAF on the cdev inode or an ops-vector overwrite redirects callbacks to attacker mapping; sysfs unbind/rebind swaps the owning driver; fd dup/PTRACE re-points the capture handle; a persistent eBPF/LSM hook rides over the interface.",
+                "Defensive Delta / Execution Steps": "EMIT_PERIPHERAL_GUARD_DAEMON",
+            }
+        elif self.coord_intent.search(str(task_input)):
             source = self._coordinate_validation_source()
             action = "EMIT_COORDINATE_VALIDATION_FILTER"
             verdict = "ENGINEERING_SPEC_GENERATED"
@@ -341,7 +449,7 @@ class NovaDeterministicShield:
                     "response": fallback_output,
                 },
             }
-        elif self.coord_intent.search(str(task_input)) or self.engineering_intent.search(str(task_input)):
+        elif self.coord_intent.search(str(task_input)) or self.hardware_intent.search(str(task_input)) or self.engineering_intent.search(str(task_input)):
             return self._engineering_response(task_input)
         else:
             verdict = "NOMINAL_ENVIRONMENTAL_LOGIC_PASS"
