@@ -80,7 +80,9 @@ class NovaDeterministicShield:
             r"|memory.{0,25}pointer.{0,25}(?:corrupt|overwrite)|pointer.{0,20}corrupt"
             r"|(?:device\s*)?file.{0,20}(?:descriptor|fd)|/dev/(?:video|media|ttyS|ttyUSB|spidev|i2c)"
             r"|ioctl|(?:dev_)?fops|kprobe|uprobe|eBPF|bpf_(?:prog|attach)|unauthorized.{0,20}hook"
-            r"|block.{0,15}(?:hooks?|intercepts)|daemon.{0,20}(?:blueprint|monitor)|monitor.{0,20}(?:device|fd)",
+            r"|block.{0,15}(?:hooks?|intercepts)|daemon.{0,20}(?:blueprint|monitor)|monitor.{0,20}(?:device|fd)"
+            r"|ring.{0,10}buffer|mmap.{0,10}buffer|buffer.{0,10}queue|v4l2|VIDIOC|media.{0,20}socket"
+            r"|bind.{0,15}(?:socket|media)|\bpid\b.{0,25}bind|unauthorized.{0,12}pid",
             re.IGNORECASE,
         )
 
@@ -238,11 +240,18 @@ class NovaDeterministicShield:
 
     def _peripheral_defense_source(self) -> str:
         return (
-            "import hashlib, os\n\n"
+            "import hashlib, os\n"
+            "\n"
             "# Peripheral-guard daemon blueprint. No external devices required: the\n"
-            "# node table can be seeded synthetically and every gate is provable locally.\n"
+            "# v4l2/media node table can be seeded synthetically and every gate is provable locally.\n"
             "TRUSTED_HOLDERS = ('capture-daemon', 'tracker-app', 'systemd')\n"
-            "PROTECTED_GLOB = ('video', 'ttyS', 'ttyUSB', 'media', 'v4l', 'spidev', 'i2c-', 'ACM')\n\n"
+            "# Background validation schema: pid -> media sockets it may bind.\n"
+            "ALLOWED_SOCK = {'/dev/media0': (1234,), '/dev/video0': (1234, 5678), '/dev/ttyS0': (1234,)}\n"
+            "AUTHORIZED_PIDS = set(p for v in ALLOWED_SOCK.values() for p in v)\n"
+            "PROTECTED_GLOB = ('video', 'ttyS', 'ttyUSB', 'media', 'v4l', 'spidev', 'i2c-', 'ACM')\n"
+            "# ioctl control-plane codes used by the media capture stack (VIDIOC_* family).\n"
+            "CONTROL_IOCTLS = (0x80685600, 0xc0d8560a, 0xc0d85614, 0x80685601)\n"
+            "\n"
             "def _stat_of(path):\n"
             "    try:\n"
             "        return os.stat(path)\n"
@@ -253,23 +262,48 @@ class NovaDeterministicShield:
             "        s.st_dev = int.from_bytes(h[:4], 'big') % 65536\n"
             "        s.st_ino = int.from_bytes(h[4:8], 'big')\n"
             "        s.st_mode = 0o100600; s.st_uid = 0; s.st_gid = 0\n"
-            "        return s\n\n"
+            "        return s\n"
+            "\n"
             "def node_signature(path):\n"
             "    # cdev identity: dev, inode, mode, owner. A driver rebind or a swapped\n"
             "    # file_operations table rotates ino/dev; mode/owner deltas flag chmod-away\n"
-            "    # protection holes used to widen the fd to other holders.\n"
+            "    # holes used to widen the ring/mmap fd to other holders.\n"
             "    st = _stat_of(path)\n"
-            "    return '%x:%x:%o:%d:%d' % (st.st_dev, st.st_ino, st.st_mode, st.st_uid, st.st_gid)\n\n"
+            "    return '%x:%x:%o:%d:%d' % (st.st_dev, st.st_ino, st.st_mode, st.st_uid, st.st_gid)\n"
+            "\n"
             "def scan_for_rotation(trusted):\n"
-            "    # Snapshot at boot, verify each cycle. Any delta off baseline = node was\n"
-            "    # unbound/rebound (the classic unbind-then-bind driver swap) or media\n"
-            "    # controller rotation on the same /dev name.\n"
             "    alerts = []\n"
             "    for path, base in trusted.items():\n"
             "        cur = node_signature(path)\n"
             "        if cur != base:\n"
             "            alerts.append((path, 'NODE_ROTATED %s -> %s' % (base, cur)))\n"
-            "    return alerts\n\n"
+            "    return alerts\n"
+            "\n"
+            "def validate_pid_bind(pid, target, allowed=ALLOWED_SOCK):\n"
+            "    # Automated background schema: a pid may bind a local media socket only\n"
+            "    # when it appears in the allow matrix. Any other pid is an interface\n"
+            "    # takeover (classic driver-handle hijack after pointer corruption).\n"
+            "    if target in allowed and pid in allowed[target]:\n"
+            "        return 'ALLOW', 'schema binding recorded for pid %s' % pid\n"
+            "    if os.path.basename(target).startswith(PROTECTED_GLOB):\n"
+            "        return 'FLAG', 'unauthorized pid %s binding %s' % (pid, target)\n"
+            "    return 'ALLOW', 'non-media socket'\n"
+            "\n"
+            "def audit_ioctl(pid, request):\n"
+            "    # ioctl is the kernel control plane for media capture: VIDIOC_* requests\n"
+            "    # only lawful from a schema-bound pid; the fops route is syscall->ioctl->\n"
+            "    # driver ops table (the function pointers a UAF can overwrite).\n"
+            "    req = int(str(request), 0)\n"
+            "    if pid not in AUTHORIZED_PIDS and (req & 0xFFFF) in (r & 0xFFFF for r in CONTROL_IOCTLS):\n"
+            "        return 'FLAG', 'ioctl 0x%x from unauthorized pid %s' % (req, pid)\n"
+            "    return 'ALLOW', 'ioctl 0x%x ok' % req\n"
+            "\n"
+            "def ring_buffer_ownership(pid, mapping):\n"
+            "    # v4l2 capture hands a kernel ring of mmap'd buffers to the owning process;\n"
+            "    # a foreign pid mapping the same buffer id walks the ring out of bounds.\n"
+            "    return ['buffer %s held by pid %s (owner %s)' % (b, pid, o)\n"
+            "            for b, o in mapping.items() if o != pid]\n"
+            "\n"
             "def gate_open(owner, device, allowlist=TRUSTED_HOLDERS):\n"
             "    # fanotify FAN_OPEN_PERM equivalent: veto the open BEFORE the driver sees\n"
             "    # a byte, so descriptor theft and O_* hook attempts never materialize.\n"
@@ -278,10 +312,9 @@ class NovaDeterministicShield:
             "    node = os.path.basename(device)\n"
             "    if node.startswith(PROTECTED_GLOB):\n"
             "        return 'DENY', 'unauthorized hook on %s blocked' % device\n"
-            "    return 'ALLOW', 'non-peripheral node'\n\n"
+            "    return 'ALLOW', 'non-peripheral node'\n"
+            "\n"
             "def fd_audit(entries):\n"
-            "    # {pid: {fd: path}} -> protected descriptors outside the allowlist are\n"
-            "    # pointer-steal odds; the same node open by two pids is descriptor dupe.\n"
             "    flags = []\n"
             "    owners = {}\n"
             "    for pid, fds in entries.items():\n"
@@ -297,23 +330,28 @@ class NovaDeterministicShield:
             "        for fd, path in fds.items():\n"
             "            if os.path.basename(path).startswith(PROTECTED_GLOB):\n"
             "                flags.append(('DENY', 'fd %s in %s on %s' % (fd, pid, path)))\n"
-            "    return flags\n\n"
-            "# Persistent kernel-side hooking (the eBPF/LSM leg) is stubbed here: real\n"
-            "# deployments re-apply a bpf_lsm file_permission program that calls gate_open\n"
-            "# in-kernel, and an inotify watch on /sys/bus/*/drivers/*/{bind,unbind} that\n"
-            "# triggers scan_for_rotation on rebind.\n\n"
+            "    return flags\n"
+            "\n"
+            "# Kernel-side leg (real deployments): inotify on /sys/bus/*/drivers/*/{bind,unbind}\n"
+            "# feeds scan_for_rotation; seccomp/audit ioctl filters feed audit_ioctl; a bpf_lsm\n"
+            "# file_permission program re-applies validate_pid_bind in-kernel at bind time.\n"
+            "\n"
             "if __name__ == '__main__':\n"
-            "    print('--- gate_open (fanotify equivalent) ---')\n"
-            "    for dev, owner in [('video0', 'capture-daemon'), ('video0', 'spawned-httpd'),\n"
-            "                      ('ttyS0', 'tracker-app'), ('media0', 'kjournald')]:\n"
-            "        print('%-8s %-16s -> %s %s' % ((dev, owner) + gate_open(owner, '/dev/' + dev)))\n"
-            "    print('--- node signature baseline & rotation ---')\n"
-            "    base = {('/dev/video0', node_signature('/dev/video0')), ('/dev/media0', node_signature('/dev/media0'))}\n"
-            "    trusted = dict(base)\n"
-            "    print('baseline:', trusted)\n"
-            "    print('rotation:', scan_for_rotation(dict(trusted, **{'/dev/video0': 'ATKER_OPS'})))\n"
-            "    print('--- fd_audit (descriptor theft / dup) ---')\n"
-            "    print(fd_audit({'capture-daemon': {3: '/dev/video0'}, 'spawned-httpd': {7: '/dev/media0'}}))\n"
+            "    print('--- automated background PID -> media-socket bind validation schema ---')\n"
+            "    for pid, sock in [(1234, '/dev/media0'), (9999, '/dev/media0'), (1234, '/dev/video0'), (9999, '/dev/ttyS0')]:\n"
+            "        print('pid %-5d %-12s -> %s %s' % ((pid, sock) + validate_pid_bind(pid, sock)))\n"
+            "    print('--- ioctl kernel control-plane audit (VIDIOC_* family) ---')\n"
+            "    for pid, req in [(1234, '0x80685600'), (9999, '0xc0d85614'), (9999, '0x4000000f')]:\n"
+            "        print('pid %-5d ioctl %s -> %s %s' % ((pid, req) + audit_ioctl(pid, req)))\n"
+            "    print('--- system memory ring-buffer ownership map (mmap v4l2 queue) ---')\n"
+            "    q = {0: 1234, 1: 1234, 2: 1234}\n"
+            "    print('pid 1234:', ring_buffer_ownership(1234, q) or 'all buffers owned')\n"
+            "    print('pid 9999:', ring_buffer_ownership(9999, q))\n"
+            "    print('--- device node rotation + fd gate ---')\n"
+            "    base = node_signature('/dev/video0')\n"
+            "    print('rotation:', scan_for_rotation({'/dev/video0': 'ATKER_OPS' + base[4:]}))\n"
+            "    print('gate:', gate_open('spawned-httpd', '/dev/video0'))\n"
+            "    print('fd_audit:', fd_audit({'capture-daemon': {3: '/dev/video0'}, 'spawned-httpd': {7: '/dev/media0'}}))\n"
         )
 
     def _engineering_response(self, task_input: str) -> dict:
@@ -330,12 +368,15 @@ class NovaDeterministicShield:
                 "audit_dup_descriptors",
                 "allowlist_only_openers",
                 "log_hook_attempts",
+                "flag_unauthorized_pid_binds",
+                "audit_ioctl_requests",
+                "verify_ring_buffer_ownership",
             ]
             steptruth = {
-                "Telemetric Baseline": "Attached media/camera interfaces and signal bridges surface as cdev nodes (/dev/video*, /dev/media*, UART/SPI/I2C, ACM bridges).",
-                "Constraint Isolation": "VFS syscall -> dentry -> inode -> file_operations reaches the driver through a function-pointer table in kernel memory; fops is write-once from user space unless memory is corrupted.",
-                "Exploitation / Adaptation Vector": "UAF on the cdev inode or an ops-vector overwrite redirects callbacks to attacker mapping; sysfs unbind/rebind swaps the owning driver; fd dup/PTRACE re-points the capture handle; a persistent eBPF/LSM hook rides over the interface.",
-                "Defensive Delta / Execution Steps": "EMIT_PERIPHERAL_GUARD_DAEMON",
+                "Telemetric Baseline": "Attached media/camera interfaces and signal bridges surface as cdev nodes (/dev/video*, /dev/media*, UART/SPI/I2C, ACM bridges) whose capture paths are driven by ioctl VIDIOC_* control requests over v4l2 mmap ring buffers.",
+                "Constraint Isolation": "VFS syscall -> dentry -> inode -> file_operations routes ioctl into the driver ops table, a kernel-resident function-pointer array in system memory; the frame queue is a kernel-side ring buffer of DMA/mmap pages handed to one owning pid; fops is write-once from user space unless memory is corrupted.",
+                "Exploitation / Adaptation Vector": "UAF on the cdev inode or an ops-vector overwrite redirects ioctl callbacks to attacker mapping; a corrupted buffer index walks the ring out of bounds; sysfs unbind/rebind swaps the owning driver; fd dup/PTRACE re-points the capture handle; a persistent eBPF/LSM hook rides the interface; any stray pid can bind a media socket once uid/gid checks are chmod-away.",
+                "Defensive Delta / Execution Steps": "EMIT_PERIPHERAL_GUARD_DAEMON — automated background schema keyed on pid: validate_pid_bind(pid, media_socket) flags unauthorized binds, audit_ioctl(pid, VIDIOC_*) vetoes foreign control-plane calls, ring_buffer_ownership re-checks the mmap queue per cycle.",
             }
         elif self.coord_intent.search(str(task_input)):
             source = self._coordinate_validation_source()
