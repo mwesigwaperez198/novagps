@@ -15,6 +15,8 @@ prometheus-fastapi-instrumentator>=7.0.0,<8.0.0
 python-dotenv>=1.0.1,<2.0.0
 httpx>=0.27.0,<1.0.0
 requests>=2.31.0,<3.0.0
+llama-cpp-python==0.2.76
+huggingface_hub==0.23.0
 pytest>=8.3.0,<9.0.0
 pytest-asyncio>=0.24.0,<1.0.0
 ruff>=0.6.0,<1.0.0

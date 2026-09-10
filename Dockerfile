@@ -12,9 +12,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends gcc libpq-dev curl ca-certificates \
+    && apt-get install -y --no-install-recommends gcc g++ make cmake libpq-dev curl ca-certificates \
         nmap whois dnsutils netcat-openbsd openssl iproute2 iputils-ping traceroute \
     && rm -rf /var/lib/apt/lists/*
+
+# llama-cpp-python builds from source: force a CPU-only build (no Metal/BLAS).
+ENV CMAKE_ARGS="-DLLAMA_METAL=OFF -DLLAMA_BLAS=OFF" \
+    CFLAGS="-O2 -march=x86-64" \
+    CXXFLAGS="-O2 -march=x86-64"
 
 COPY backend/requirements.txt /app/requirements.txt
 RUN pip install --upgrade pip \

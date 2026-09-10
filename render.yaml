@@ -30,6 +30,15 @@ services:
         value: /var/data
       - key: DATABASE_URL
         value: sqlite:////var/data/nova.sqlite3
+      # NOVA-CORE embedded brain: downloads a small GGUF into /var/data/nova_vault/models
+      # on first boot and runs llama.cpp in-process. Falls back to the deterministic
+      # shield when the instance RAM cannot fit a model.
+      - key: NOVA_EMBEDDED
+        value: "1"
+      - key: NOVA_LLM_BACKEND
+        value: embedded
+      - key: NOVA_AGENT_NAME
+        value: LAU
       - key: SECRET_KEY
         sync: false
       - key: DEV_OWNER_EMAIL
@@ -37,4 +46,4 @@ services:
     disk:
       name: nova-gps-data
       mountPath: /var/data
-      sizeGB: 1
+      sizeGB: 10

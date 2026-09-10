@@ -2468,6 +2468,20 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 
 _frontend_dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+
+try:
+    import sys as _sys
+    _nova_core_path = Path(__file__).resolve().parent.parent
+    if str(_nova_core_path) not in _sys.path:
+        _sys.path.insert(0, str(_nova_core_path))
+    from nova_core.routes import register_nova_routes
+    register_nova_routes(app)
+
+    from nova_core.engine import get_engine
+    get_engine().start_async()
+except Exception:
+    pass
+
 if _frontend_dist.is_dir():
     from fastapi.staticfiles import StaticFiles
 
