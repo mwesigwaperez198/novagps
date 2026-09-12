@@ -186,6 +186,48 @@ async def rate_limit(request: Request, call_next):
     return await call_next(request)
 
 
+ADMIN_OVERRIDE_PATHS = (
+    "/docs",
+    "/redoc",
+    "/openapi.json",
+    "/metrics",
+)
+
+
+@app.middleware("http")
+async def gate_admin_surface(request: Request, call_next):
+    """Lock the API metadata surface (/docs, /redoc, /openapi.json, /metrics).
+
+    In production these endpoints reveal the full route map and performance
+    telemetry to anyone. Require an authenticated admin bearer token; in
+    development keep them open for local work.
+    """
+    path = request.url.path
+    if settings.environment != "production" or path not in ADMIN_OVERRIDE_PATHS:
+        return await call_next(request)
+
+    token = bear_token(request)
+    if not token:
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"detail": "Admin bearer token required"},
+        )
+    try:
+        payload = jwt.decode(token, settings.secret_key, algorithms=[settings.jwt_algorithm])
+    except Exception:
+        return JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content={"detail": "Invalid or expired token"},
+        )
+    role = payload.get("role", "")
+    if role not in ("admin", "superadmin", "auditor"):
+        return JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content={"detail": "Insufficient role to view API metadata"},
+        )
+    return await call_next(request)
+
+
 @app.post("/auth/login")
 def auth_login(
     request_body: dict[str, str] = {},
