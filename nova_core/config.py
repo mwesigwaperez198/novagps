@@ -19,6 +19,7 @@ class NovaCoreConfig:
     alert_file: Path = field(default_factory=lambda: Path(os.environ.get("NOVA_ALERT_FILE", "/var/data/nova_vault/alerts.json")))
 
     backend_url: str = field(default_factory=lambda: os.environ.get("NOVA_BACKEND_URL", "http://127.0.0.1:8000"))
+    backend_token: str = field(default_factory=lambda: os.environ.get("NOVA_TOKEN", ""))
     environment: str = field(default_factory=lambda: os.environ.get("ENVIRONMENT", "development"))
     auto_enroll: bool = field(default_factory=lambda: os.environ.get("AUTO_ENROLL", "0") == "1")
     secret_key: str = field(default_factory=lambda: os.environ.get("SECRET_KEY", ""))

@@ -66,6 +66,14 @@ def format_device_lookup(o: dict, indent: int = 0) -> str:
             )
         else:
             lines.append("  last fix: none yet")
+    loc = o.get("locate")
+    if loc:
+        if loc.get("ok"):
+            body = loc.get("result") or {}
+            queued = body.get("queued") or body.get("status") or body.get("command_id") or body.get("accepted")
+            lines.append(f"  LIVE LOCATE → queued ({queued})")
+        else:
+            lines.append(f"  LIVE LOCATE → failed: {loc.get('error') or loc.get('status_code')} {loc.get('result') or ''}".rstrip())
     return ("\n" + pad).join(lines)
 
 
@@ -394,6 +402,18 @@ class NovaBrain:
             "lookup device": "device_lookup",
             "locate device": "device_lookup",
             "track device": "device_lookup",
+            "track phone": "device_lookup",
+            "find phone": "device_lookup",
+            "locate phone": "device_lookup",
+            "track": "device_lookup",
+            "locate": "device_lookup",
+            "trigger locate": "device_lookup",
+            "live locate": "device_lookup",
+            "ping device": "device_lookup",
+            "device position": "device_lookup",
+            "get location": "device_lookup",
+            "find position": "device_lookup",
+            "give me position": "device_lookup",
             "imei": "device_lookup",
             "serial number": "device_lookup",
             "device info": "device_lookup",
@@ -487,13 +507,22 @@ class NovaBrain:
                         after = _re3.split(
                             r"(?:show|give me|fetch|get)\s+(?:me\s+)?(?:the\s+)?"
                             r"(?:full\s+)?device\s+(?:info|details|information)\s+(?:on|for|about)\s+"
-                            r"|(?:locate|track|find|lookup)\s+(?:the\s+)?(?:device\s+)?"
+                            r"|(?:locate|track|find|lookup|ping)\s+(?:the\s+)?(?:device\s+|phone\s+)?"
+                            r"|(?:trigger|send)\s+(?:a\s+)?(?:fresh\s+|live\s+)?locate\s+(?:on|for|to)\s+"
+                            r"|(?:give me|get)\s+(?:a\s+)?(?:fresh\s+|live\s+)?(?:find\s+)?position\s+(?:for|of|on)\s+"
                             r"|where's\s+(?:the\s+)?|where is\s+(?:the\s+)?",
                             query,
                         )
                         if len(after) > 1:
                             q = after[-1].strip().strip("?.!").strip()
+                        q = _re3.sub(r"^(?:on|for|to|of|the|a|an)\s+", "", q).strip()
                     params["query"] = q or query.strip()
+                    params["trigger_locate"] = any(
+                        w in query_lower for w in [
+                            "locate", "track", "ping", "live", "fresh",
+                            "trigger", "now", "give me position", "find position",
+                        ]
+                    )
                 a = {"tool": tool_name, "params": params}
                 if a not in actions:
                     actions.append(a)

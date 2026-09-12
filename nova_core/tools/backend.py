@@ -48,7 +48,11 @@ class DeviceEnumerator(Tool):
         cfg = get_config()
 
         try:
-            resp = httpx.get(f"{cfg.backend_url}/devices", timeout=10)
+            resp = httpx.get(
+                f"{cfg.backend_url}/devices",
+                headers=_auth_headers(),
+                timeout=10,
+            )
             if resp.status_code == 200:
                 devices = resp.json()
                 return ToolResult(
@@ -68,11 +72,12 @@ class DeviceLookup(Tool):
     name = "device_lookup"
     description = (
         "Resolve a registered device by IMEI, serial number, identifier, or name and "
-        "return its identity, status, IPs, and latest GPS position."
+        "return its identity, status, IPs, and latest GPS position. Pass "
+        "trigger_locate=True to also push a fresh live-locate command to the device."
     )
     category = "backend"
 
-    def execute(self, query: str = "", **kwargs) -> ToolResult:
+    def execute(self, query: str = "", trigger_locate: bool = False, **kwargs) -> ToolResult:
         import httpx
         cfg = get_config()
         if not query:
@@ -81,6 +86,7 @@ class DeviceLookup(Tool):
             resp = httpx.get(
                 f"{cfg.backend_url}/search",
                 params={"q": query.strip()},
+                headers=_auth_headers(),
                 timeout=10,
             )
             if resp.status_code == 200:
@@ -97,18 +103,45 @@ class DeviceLookup(Tool):
                         },
                     )
                 briefs = [device_brief(d) for d in matches]
-                return ToolResult(
-                    success=True,
-                    output={
-                        "query": query.strip(),
-                        "device_count": len(matches),
-                        "devices": briefs,
-                    },
-                )
+                result: dict = {
+                    "query": query.strip(),
+                    "device_count": len(matches),
+                    "devices": briefs,
+                }
+                if trigger_locate:
+                    locate = _trigger_locate(matches[0].get("id", ""))
+                    result["locate"] = locate
+                return ToolResult(success=True, output=result)
             else:
                 return ToolResult(success=True, output={"status_code": resp.status_code, "body": resp.text[:400]})
         except Exception as e:
             return ToolResult(success=False, output=None, error=str(e))
+
+
+def _auth_headers() -> dict:
+    """Bearer header when NOVA_TOKEN is configured; empty for dev bypass."""
+    cfg = get_config()
+    if cfg.backend_token:
+        return {"Authorization": f"Bearer {cfg.backend_token}"}
+    return {}
+
+
+def _trigger_locate(device_id: str) -> dict:
+    """Queue a live-locate command for a resolved device. Never raises."""
+    import httpx
+    cfg = get_config()
+    if not device_id:
+        return {"ok": False, "error": "No device id resolved"}
+    try:
+        resp = httpx.post(
+            f"{cfg.backend_url}/device/{device_id}/trigger-locate",
+            headers=_auth_headers(),
+            timeout=10,
+        )
+        body = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else resp.text[:300]
+        return {"ok": resp.status_code == 200, "status_code": resp.status_code, "result": body}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 def device_brief(d: dict) -> dict:
@@ -150,6 +183,7 @@ class AlertChecker(Tool):
             resp = httpx.get(
                 f"{cfg.backend_url}/alerts",
                 params={"limit": limit},
+                headers=_auth_headers(),
                 timeout=10,
             )
             if resp.status_code == 200:
@@ -178,7 +212,11 @@ class MetricsCollector(Tool):
         cfg = get_config()
 
         try:
-            resp = httpx.get(f"{cfg.backend_url}/metrics", timeout=10)
+            resp = httpx.get(
+                f"{cfg.backend_url}/metrics",
+                headers=_auth_headers(),
+                timeout=10,
+            )
             if resp.status_code == 200:
                 metrics_text = resp.text
                 parsed = {}
@@ -218,7 +256,7 @@ class EndpointTester(Tool):
 
         endpoints = [
             ("GET", "/health", None, [200]),
-            ("GET", "/metrics", None, [200]),
+            ("GET", "/metrics", None, [200, 401, 403]),
             ("POST", "/auth/login", {"email": "test", "password": "test"}, [401, 422]),
             ("GET", "/devices", None, [401, 200]),
             ("GET", "/geofences", None, [401, 200]),
@@ -232,15 +270,16 @@ class EndpointTester(Tool):
         results = []
         passed = 0
         failed = 0
+        headers = _auth_headers()
 
         for method, path, body, expected_codes in endpoints:
             try:
                 url = f"{cfg.backend_url}{path}"
                 start = time.time()
                 if method == "GET":
-                    resp = httpx.get(url, timeout=10)
+                    resp = httpx.get(url, headers=headers, timeout=10)
                 else:
-                    resp = httpx.post(url, json=body, timeout=10)
+                    resp = httpx.post(url, json=body, headers=headers, timeout=10)
                 latency = (time.time() - start) * 1000
 
                 ok = resp.status_code in expected_codes

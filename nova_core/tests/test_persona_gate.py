@@ -164,6 +164,7 @@ class TestDeviceLookup:
         acts = [a for a in parsed["actions"] if a["tool"] == "device_lookup"]
         assert len(acts) == 1
         assert acts[0]["params"]["query"] == "355985051234567"
+        assert acts[0]["params"]["trigger_locate"] is True
 
     def test_parse_serial(self):
         from nova_core.brain import NovaBrain
@@ -176,6 +177,35 @@ class TestDeviceLookup:
         parsed = NovaBrain()._parse_request("show device info for test-phone")
         acts = [a for a in parsed["actions"] if a["tool"] == "device_lookup"]
         assert acts[0]["params"]["query"] == "test-phone"
+        assert acts[0]["params"]["trigger_locate"] is False
+
+    def test_parse_trigger_no_trigger_for_info(self):
+        from nova_core.brain import NovaBrain
+        parsed = NovaBrain()._parse_request("show device info for test-phone")
+        assert all(a["params"].get("trigger_locate") is False for a in parsed["actions"])
+
+    def test_format_live_locate_queued(self):
+        from nova_core.brain import format_device_lookup
+        s = format_device_lookup({
+            "query": "355985051234567",
+            "device_count": 1,
+            "devices": [{
+                "id": "d1", "name": "S21", "identifier": "phone-1",
+                "imei": "355985051234567", "serial": None,
+            }],
+            "locate": {"ok": True, "status_code": 200, "result": {"command_id": "abc123", "status": "pending"}},
+        })
+        assert "LIVE LOCATE → queued (pending)" in s
+
+    def test_format_live_locate_failed(self):
+        from nova_core.brain import format_device_lookup
+        s = format_device_lookup({
+            "query": "x",
+            "device_count": 1,
+            "devices": [{"id": "d1", "name": "X", "identifier": "x"}],
+            "locate": {"ok": False, "error": "boom"},
+        })
+        assert "LIVE LOCATE → failed" in s
 
     def test_tool_registered(self):
         from nova_core.tools import get_registry
