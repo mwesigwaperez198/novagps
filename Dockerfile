@@ -16,14 +16,19 @@ RUN apt-get update \
         nmap whois dnsutils netcat-openbsd openssl iproute2 iputils-ping traceroute \
     && rm -rf /var/lib/apt/lists/*
 
-# llama-cpp-python builds from source: force a CPU-only build (no Metal/BLAS).
-ENV CMAKE_ARGS="-DLLAMA_METAL=OFF -DLLAMA_BLAS=OFF" \
+# llama-cpp-python builds from source: force a CPU-only build with no
+# extended instruction sets. DLLAMA_AVX* flags must be explicitly OFF —
+# llama's cmake auto-detects the BUILD host's CPU (which may have AVX2)
+# and the resulting binary then crashes on Render's VM with SIGILL.
+ENV CMAKE_ARGS="-DLLAMA_METAL=OFF -DLLAMA_BLAS=OFF -DLLAMA_AVX=OFF -DLLAMA_AVX2=OFF -DLLAMA_AVX512=OFF -DLLAMA_FMA=OFF -DLLAMA_F16C=OFF" \
     CFLAGS="-O2 -march=x86-64" \
     CXXFLAGS="-O2 -march=x86-64"
 
 COPY backend/requirements.txt /app/requirements.txt
 RUN pip install --upgrade pip \
-    && pip install --no-cache-dir -r /app/requirements.txt
+    && pip install --no-cache-dir -r /app/requirements.txt \
+    && pip install --no-cache-dir llama-cpp-python==0.2.76 huggingface_hub==0.23.0 || \
+       echo "[nova] llama-cpp-python unavailable — deterministic shield will be used"
 
 COPY backend/ /app/
 COPY nova_core/ /app/nova_core/
