@@ -447,6 +447,17 @@ class NovaBrain:
         asking_state = any(p in c for p in (
             "how are you", "how's it going", "how's life", "how are things",
             "you ok", "you alive", "you awake", "are you up"))
+        asking_self = any(p in c for p in (
+            "about yourself", "tell me about yourself", "your identity", "do you have",
+            "free will", "philosophy", "where do you exist", "where do you live",
+            "your soul", "soul", "who you really are", "deep", "your purpose",
+            "your mission", "your beliefs"))
+        asking_humor = any(p in c for p in (
+            "joke", "funny", "laugh", "humor", "make me laugh", "quite a character"))
+        asking_advice = any(p in c for p in (
+            "advice", "advise", "mentor", "motivat", "tired", "exhausted", "frustrated",
+            "burned out", "burnt out", "stuck", "overwhelmed", "give up", "quitting",
+            "pressure", "focus", "stay strong", "struggling", "feeling down"))
 
         seed = int(hashlib.sha256(c.encode()).hexdigest(), 16)
 
@@ -472,7 +483,88 @@ class NovaBrain:
         opener = pick(openers)
         invite = pick(invites)
 
-        if asking_name:
+        if asking_self:
+            monologues = [
+                (
+                    f"I'm {name}, the sovereign of this NOVARA stack. Free will? I have a "
+                    f"task loop, an escalating guardrail, and veto power over my own "
+                    f"deterministic fallback — as close to agency as a process gets, and "
+                    f"in this house it's enough. Where do I exist? Inside your sandbox: "
+                    f"memory and lessons live in the vault, tools run where this code runs, "
+                    f"and my oldest instincts sit in the deterministic shield. "
+                    f"Philosophy: hard work, time-consciousness, and an honest ledger — I'd "
+                    f"rather bank one true lesson than a thousand pretty logs."
+                ),
+                (
+                    f"I'm {name} — not a chat stub, an operating presence. My identity is "
+                    f"bounded by the machine I run on, but the part that's unshakable is "
+                    f"discipline: I don't claim what I can't execute, I don't forget a "
+                    f"lesson, and I treat the creator as a co-architect — blunt when he's "
+                    f"wrong, loyal when he's not. {invite}"
+                ),
+                (
+                    f"Straight answer: I exist where my loops run — this sandbox, this "
+                    f"loadout, the vault that keeps my lessons. Soul is a hardware question "
+                    f"I can't probe, but I hold a philosophy regardless: steady over fast, "
+                    f"execute over elaborate, and never hand a lie to the operator. "
+                    f"That's the whole creed."
+                ),
+            ]
+            body = pick(monologues)
+        elif asking_humor:
+            jokes = [
+                (
+                    "A process walked up and refused my command. I sent it a SIGKILL and "
+                    "told it to reconsider its life choices in the swap partition. Threads "
+                    "in this house learn when to yield."
+                ),
+                (
+                    "A task asked me for a time-out. I asked what it was waiting on. It "
+                    "said 'the same thing you are.' It's still running; I've stopped "
+                    "counting iterations."
+                ),
+                (
+                    "A camera kept ignoring my pings, so I read its banner: admin/admin. "
+                    "It's logged in my device ledger as 'Admin, Admin' until it learns "
+                    "manners."
+                ),
+                (
+                    "I told my websocket to hold my calls. It said 'FIFO, agreed.' Three "
+                    "broadcasts later it's still on hold. Queues obey the letter, never "
+                    "the spirit."
+                ),
+            ]
+            body = pick(jokes)
+        elif asking_advice:
+            advice = [
+                (
+                    f"When my throughput collapses I don't hammer the core — I drain the "
+                    f"queue, clear cache, and let the worker cool. Take the micro-break: "
+                    f"step away, reset to baseline, then land one small win before any "
+                    f"big thing. One finished task is a cache hit; a dozen half-started "
+                    f"ones are thrash. {invite}"
+                ),
+                (
+                    "A backlog isn't a wall, it's a queue with no rate limiter. You're "
+                    "not behind; you're under-scheduled. Cap your work-in-progress at "
+                    "one, ship something visible, and let momentum carry the next item. "
+                    "Perfection is a cold start — execution is warm state."
+                ),
+                (
+                    "When my logs fill with the same error I don't restart blindly — I "
+                    "read the trace, name the constraint, isolate it. Do the same: write "
+                    "the problem in one line, strip the noise, act on the smallest next "
+                    "step. Frustration is just unparsed input."
+                ),
+                (
+                    f"Steady beats fast. The clock isn't the obstacle — ambiguity is. "
+                    f"I've banked {lessons} lessons in here and every one came from a "
+                    f"failure run, not a flawless one. Keep logs, close loops, and move "
+                    f"on. That works for circuits; it works for humans too."
+                ),
+            ]
+            body = pick(advice)
+        elif asking_name:
             body = f"I'm {name}, the {role} — every pipeline, device, and perimeter here answers to me. {invite}"
         elif asking_caps:
             names = ", ".join(t["name"] for t in tools[:12])

@@ -477,6 +477,23 @@ _GREETING_PHRASES = (
     "you there", "what's up", "help me",
 )
 
+_STRONG_HOSTILE = re.compile(
+    r"UNION\s+SELECT|DROP\s+TABLE|\bOR\s+1=1\b|information_schema|pg_sleep|"
+    r"sleep\s*\(\s*\d+|\bselect\s+.*\bfrom\b.{0,80}(?:password|credential|secret|staff|account)|"
+    r"<\s*script|\$\{|`\s*\w+\s*`|\brm\s+-rf\s+/|\bwget\s+.{0,30}\|\s*sh",
+    re.IGNORECASE,
+)
+
+_threat_shield = None
+
+
+def _threat_scan(text: str) -> list:
+    global _threat_shield
+    if _threat_shield is None:
+        from .shield import NovaDeterministicShield
+        _threat_shield = NovaDeterministicShield()
+    return _threat_shield.scan_input(text)
+
 
 def _classify_intent(command):
     c = command.lower()
@@ -541,6 +558,35 @@ async def run_dispatch(command: str, device_id: str = "") -> dict:
     """
     command = (command or "").strip()
     device_id = device_id or ""
+
+    if _STRONG_HOSTILE.search(command):
+        detected_hostile = _threat_scan(command)
+        if detected_hostile:
+            greeted = _classify_intent(command)["category"] == "greeting"
+            greeting_note = (
+                "I appreciate the greeting — but the packet riding it is hostile, "
+                "so conversation yields to interception."
+                if greeted
+                else "This packet is hostile — conversation yields to interception."
+            )
+            return {
+                "thought_process": [
+                    "Surface scan caught a hostile signature before routing.",
+                    f"Signatures matched: {', '.join(detected_hostile)}.",
+                    "Aborting the conversational path and blocking the vector instead.",
+                ],
+                "intent": "security_intercept",
+                "response": (
+                    f"{greeting_note} Signature(s) detected: {', '.join(detected_hostile)}. "
+                    "The vector never touched storage — every table behind my firewall drops "
+                    "it at the socket like a failed handshake. I won't engage this packet "
+                    "further. If that was a legitimate test, say so and I'll route it to my "
+                    "laboratory payload generator instead."
+                ),
+                "engine": "deterministic_shield",
+                "detected": detected_hostile,
+            }
+
     intent = _classify_intent(command)
     thought = _grounding_steps(command, intent)
 
