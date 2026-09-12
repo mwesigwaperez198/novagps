@@ -25,6 +25,38 @@ from .tools import get_registry, ToolRegistry
 logger = logging.getLogger("nova_core.brain")
 
 
+def format_packet_capture(o: dict, indent: int = 0) -> str:
+    """Render a packet capture result as a readable traffic panel."""
+    pad = " " * indent
+    total = o.get("total_packets", 0)
+    senders = o.get("senders") or []
+    receivers = o.get("receivers") or []
+    protos = o.get("protocol_distribution") or {}
+    dns = o.get("dns_queries") or []
+    conns = o.get("tcp_connections") or []
+
+    lines = [f"{total} packets ({o.get('engine', '?')})"]
+    lines.append(f"senders: {', '.join(senders) or 'none'}")
+    lines.append(f"receivers: {', '.join(receivers) or 'none'}")
+    if protos:
+        dist = ", ".join(f"{k or '?'}={v}" for k, v in sorted(protos.items()))
+        lines.append(f"protocols: {dist}")
+    if dns:
+        lines.append(f"DNS ({len(dns)}):")
+        for q in dns[:10]:
+            ans = q.get("answer", "")
+            suffix = f" → {ans}" if ans else ""
+            lines.append(f"  {q.get('query', '?')}{suffix}")
+    if conns:
+        lines.append(f"TCP ({len(conns)}):")
+        for c in conns[:10]:
+            lines.append(
+                f"  {c.get('src', '?')}:{c.get('src_port', '')} → "
+                f"{c.get('dst', '?')}:{c.get('dst_port', '')} [{c.get('flags', '')}]"
+            )
+    return ("\n" + pad).join(lines)
+
+
 class AgentContext:
     def __init__(self):
         self.current_task: Optional[str] = None
@@ -291,6 +323,20 @@ class NovaBrain:
             "scan for threats": "threat_scan",
             "attacks from": "threat_scan",
             "attack surface": "threat_scan",
+            "capture packets": "packet_capture",
+            "packet capture": "packet_capture",
+            "capture traffic": "packet_capture",
+            "analyze packets": "packet_capture",
+            "analyze traffic": "packet_capture",
+            "packet analysis": "packet_capture",
+            "dns traffic": "packet_capture",
+            "tcp traffic": "packet_capture",
+            "sniff": "packet_capture",
+            "wireshark": "packet_capture",
+            "tshark": "packet_capture",
+            "tcpdump": "packet_capture",
+            "who is talking": "packet_capture",
+            "network traffic": "packet_capture",
         }
 
         for phrase, tool_name in tool_mappings.items():
@@ -330,7 +376,34 @@ class NovaBrain:
                     actions.append({"tool": "connectivity_probe", "params": {"host": host, "port": port}})
                     actions.append({"tool": "port_scan", "params": {"host": host, "ports": "1-1024"}})
                     continue
-
+                if tool_name == "packet_capture":
+                    import re as _re2
+                    proto = "all"
+                    if _re2.search(r"\bdns\b", query_lower):
+                        proto = "dns"
+                    elif "tcp" in query_lower or "http" in query_lower:
+                        proto = "tcp"
+                    host = ""
+                    ip_match = _re2.search(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", query_lower)
+                    if ip_match:
+                        host = ip_match.group(0)
+                    host_match = _re2.search(r"host\s+([a-z0-9.\-]+)", query_lower)
+                    if host_match:
+                        host = host_match.group(1)
+                    count = 25
+                    count_match = _re2.search(r"(\d+)\s+packets?", query_lower)
+                    if count_match:
+                        count = int(count_match.group(1))
+                    pcap = ""
+                    pcap_match = _re2.search(r"(?:\bfrom\s+)?([\w.\-/]+\.pcap(?:ng)?)", query_lower)
+                    if pcap_match:
+                        pcap = pcap_match.group(1)
+                    params["host"] = host
+                    params["protocol"] = proto
+                    params["count"] = count
+                    if pcap:
+                        params["pcap_file"] = pcap
+                    params["interface"] = ""
                 actions.append({"tool": tool_name, "params": params})
 
         if not actions:
@@ -670,6 +743,7 @@ class NovaBrain:
             "mtu_test": lambda o: f"Effective MTU: {o.get('effective_mtu', 0)}",
             "bandwidth_test": lambda o: f"{o.get('bandwidth_mbps', 0)} Mbps to {o.get('host', '')}",
             "payload_gen": lambda o: f"Generated {o.get('count', 0)} {o.get('category', '')} payloads",
+            "packet_capture": lambda o: format_packet_capture(o, 0),
         }
 
         formatter = formatters.get(tool_name)

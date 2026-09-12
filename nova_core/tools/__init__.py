@@ -105,6 +105,7 @@ def _register_all_tools(registry: ToolRegistry):
     from .network import register_network_tools
     from .backend import register_backend_tools
     from .code_analysis import register_code_analysis_tools
+    from .packet import register_packet_tools
 
     register_scanner_tools(registry)
     register_fuzzer_tools(registry)
@@ -112,3 +113,4 @@ def _register_all_tools(registry: ToolRegistry):
     register_network_tools(registry)
     register_backend_tools(registry)
     register_code_analysis_tools(registry)
+    register_packet_tools(registry)

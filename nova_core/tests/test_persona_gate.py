@@ -103,3 +103,55 @@ class TestThreatPanel:
     def test_no_verdict_without_scan(self):
         from nova_core.brain import NovaBrain
         assert NovaBrain()._threat_verdict({"system_info": {"success": True}}) == ""
+
+
+class TestPacketCapture:
+    def test_parse_routes_sniff_with_proto_and_count(self):
+        from nova_core.brain import NovaBrain
+        parsed = NovaBrain()._parse_request("sniff 50 packets tcp")
+        caps = [a for a in parsed["actions"] if a["tool"] == "packet_capture"]
+        assert caps
+        assert caps[0]["params"]["protocol"] == "tcp"
+        assert caps[0]["params"]["count"] == 50
+
+    def test_parse_routes_dns_traffic(self):
+        from nova_core.brain import NovaBrain
+        parsed = NovaBrain()._parse_request("capture dns traffic")
+        caps = [a for a in parsed["actions"] if a["tool"] == "packet_capture"]
+        assert caps[0]["params"]["protocol"] == "dns"
+
+    def test_parse_routes_pcap_file(self):
+        from nova_core.brain import NovaBrain
+        parsed = NovaBrain()._parse_request("analyze packets from trace.pcap")
+        caps = [a for a in parsed["actions"] if a["tool"] == "packet_capture"]
+        assert caps[0]["params"]["pcap_file"] == "trace.pcap"
+
+    def test_tshark_fields_parsed(self):
+        from nova_core.tools.packet import PacketCapture
+        out = PacketCapture()._parse_tshark_fields([
+            "frame.time_relative|ip.src|ip.dst|tcp.srcport|tcp.dstport|udp.srcport|udp.dstport|dns.qry.name|dns.a|tcp.flags.str|_ws.col.Protocol|frame.len",
+            "0.000000|192.168.1.5|8.8.8.8|||||example.com|93.184.216.34||DNS|60",
+            "1.000000|93.184.216.34|192.168.1.5|443|53000|||||SA|TCP|1500",
+        ]).output
+        assert out["total_packets"] == 2
+        assert out["dns_queries"][0]["query"] == "example.com"
+        assert out["tcp_connections"][0]["flags"] == "SA"
+
+    def test_tcpdump_text_parsed_ports(self):
+        from nova_core.tools.packet import PacketCapture
+        out = PacketCapture()._parse_tcpdump_text([
+            "2026-09-12 15:40:01.234567 IP 192.168.1.5.53000 > 8.8.8.8.53: 12345+ A? novagps.onrender.com. (42)",
+            "2026-09-12 15:40:01.240000 IP 192.168.1.5.53001 > 142.250.1.1.443: Flags [S], seq 1",
+        ]).output
+        assert out["dns_queries"][0]["query"] == "novagps.onrender.com"
+        conn = [c for c in out["tcp_connections"] if c.get("dst_port") == "443"][0]
+        assert conn["src_port"] == "53001"
+        assert conn["flags"] == "S"
+
+    def test_missing_engine_returns_graceful_error(self):
+        from nova_core.tools.packet import PacketCapture
+        import shutil
+        if not shutil.which("tshark") and not shutil.which("tcpdump"):
+            r = PacketCapture().execute(duration=1, count=5, protocol="all")
+            assert r.success is False
+            assert "shark" in r.error or "tcpdump" in r.error or "raw socket" in r.error
