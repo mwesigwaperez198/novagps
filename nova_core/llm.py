@@ -102,7 +102,7 @@ class NovaLLM:
         history: Optional[List[dict]] = None,
         temperature: float = 0.2,
         num_predict: int = 2048,
-        timeout: int = 120,
+        timeout: int = 600,
     ) -> Tuple[bool, str]:
         messages = []
         if system:
@@ -217,7 +217,7 @@ Keep it concise and actionable:"""
             prompt=prompt,
             temperature=0.4,
             num_predict=1024,
-            timeout=120,
+            timeout=600,
         )
 
         if ok:
