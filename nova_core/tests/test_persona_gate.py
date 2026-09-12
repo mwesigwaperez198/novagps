@@ -207,6 +207,59 @@ class TestDeviceLookup:
         })
         assert "LIVE LOCATE → failed" in s
 
+
+class TestLANDiscovery:
+    def test_parse_human_phrasing(self):
+        from nova_core.brain import NovaBrain
+        q = ("can scan for nearby ip addresses to the system and those connected "
+             "to the same internet connection")
+        parsed = NovaBrain()._parse_request(q)
+        tools = [a["tool"] for a in parsed["actions"]]
+        assert parsed["intent"] == "execute"
+        assert "network_discovery" in tools
+        assert "port_scan" not in tools
+
+    def test_parse_same_network(self):
+        from nova_core.brain import NovaBrain
+        parsed = NovaBrain()._parse_request("scan for devices on the same network as this computer")
+        assert "network_discovery" in [a["tool"] for a in parsed["actions"]]
+
+    def test_parse_router_wifi(self):
+        from nova_core.brain import NovaBrain
+        for q in ("what devices are on my router", "list hosts connected to my wifi"):
+            parsed = NovaBrain()._parse_request(q)
+            assert "network_discovery" in [a["tool"] for a in parsed["actions"]]
+
+    def test_tool_lists_self_host(self):
+        from nova_core.tools.network import LANDiscovery
+        out = LANDiscovery().execute().output
+        assert out["own_ips"]
+        assert out["self_count"] >= 1
+        assert any(h["is_self"] for h in out["hosts"])
+
+    def test_format_panel(self):
+        from nova_core.brain import format_network_discovery
+        s = format_network_discovery({
+            "own_ips": ["192.168.1.10"],
+            "gateway": "192.168.1.1",
+            "host_count": 2,
+            "hosts": [
+                {"ip": "192.168.1.10", "mac": "", "is_self": True, "is_gateway": False, "ports": [], "kind": "self"},
+                {"ip": "192.168.1.5", "mac": "aa:bb:cc:dd:ee:ff", "is_self": False, "is_gateway": False,
+                 "ports": [80, 443], "kind": "web-ui"},
+            ],
+        })
+        assert "THIS MACHINE" in s
+        assert "192.168.1.1" in s
+        assert "192.168.1.5" in s
+        assert "web-ui" in s
+
+    def test_rejects_bad_subnet(self):
+        from nova_core.tools.network import LANDiscovery
+        r = LANDiscovery().execute(subnets="not-a-subnet")
+        assert r.success is False
+        assert "Bad subnet" in r.error
+
     def test_tool_registered(self):
         from nova_core.tools import get_registry
         reg = get_registry()

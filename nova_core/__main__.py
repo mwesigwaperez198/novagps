@@ -351,6 +351,12 @@ def _tool_brief(result: dict, tool_name: str, indent: int = 4) -> str:
             for dev in (out.get("devices") or [])[:2]:
                 ident = dev.get("name") or dev.get("identifier") or dev.get("id", "?")
                 bits.append(f"{ident}{' · LOST' if dev.get('lost_mode') else ''}")
+        if "host_count" in out:
+            bits.append(f"hosts={out['host_count']}")
+            if out.get("own_ips"):
+                bits.append(f"self={out['own_ips'][0]}")
+            if out.get("gateway"):
+                bits.append(f"gw={out['gateway']}")
         if "alert_count" in out:
             bits.append(f"alerts={out['alert_count']}")
         if "status" in out and isinstance(out.get("status"), str):

@@ -25,6 +25,28 @@ from .tools import get_registry, ToolRegistry
 logger = logging.getLogger("nova_core.brain")
 
 
+def format_network_discovery(o: dict, indent: int = 0) -> str:
+    """Render a LAN discovery result as a readable neighboring-hosts panel."""
+    pad = " " * indent
+    own = o.get("own_ips") or []
+    gw = o.get("gateway") or ""
+    hosts = o.get("hosts") or []
+    lines = []
+    lines.append(f"local network · {own and own[0]}{' · gateway ' + gw if gw else ''}")
+    lines.append(f"{len(hosts)} reachable host(s)")
+    for h in hosts[:20]:
+        who = []
+        if h.get("is_self"):
+            who.append("THIS MACHINE")
+        if h.get("is_gateway"):
+            who.append("GATEWAY")
+        tag = f"  [{' · '.join(who)}]" if who else ""
+        ports = ", ".join(str(p) for p in h.get("ports") or []) or "—"
+        mac = h.get("mac") or "—"
+        lines.append(f"  {h.get('ip', '?')}{tag}  {h.get('kind', 'host')}  ports={ports}  mac={mac}")
+    return ("\n" + pad).join(lines)
+
+
 def format_device_lookup(o: dict, indent: int = 0) -> str:
     """Render a device lookup (IMEI/serial/identifier) result as a device card."""
     pad = " " * indent
@@ -335,7 +357,13 @@ class NovaBrain:
             "security scan": "vuln_scan",
             "auth test": "auth_scan",
             "test auth": "auth_scan",
+            "brute force": "auth_scan",
+            "bruteforce": "auth_scan",
+            "bruteforce test": "auth_scan",
+            "weak password": "auth_scan",
             "crypto audit": "crypto_audit",
+            "cryptography": "crypto_audit",
+            "crypto": "crypto_audit",
             "secret scan": "secret_scan",
             "find secrets": "secret_scan",
             "leaked keys": "secret_scan",
@@ -343,13 +371,24 @@ class NovaBrain:
             "fuzz api": "api_fuzzer",
             "injection test": "injection_test",
             "test injection": "injection_test",
+            "sql injection": "injection_test",
             "system info": "system_info",
             "system status": "system_info",
             "server status": "system_info",
+            "this system": "system_info",
+            "this computer": "system_info",
+            "about this machine": "system_info",
+            "network interfaces": "network_interfaces",
+            "network interface": "network_interfaces",
+            "my ip": "network_interfaces",
+            "my network cards": "network_interfaces",
             "process list": "process_list",
             "running processes": "process_list",
             "read log": "log_reader",
             "check logs": "log_reader",
+            "the logs": "log_reader",
+            "search for errors": "log_reader",
+            "errors in log": "log_reader",
             "file integrity": "file_integrity",
             "integrity check": "file_integrity",
             "network test": "connectivity_probe",
@@ -360,7 +399,8 @@ class NovaBrain:
             "health check": "backend_health",
             "check health": "backend_health",
             "list devices": "device_enum",
-            "devices": "device_enum",
+            "registered devices": "device_enum",
+            "backend devices": "device_enum",
             "alerts": "alert_check",
             "check alerts": "alert_check",
             "metrics": "metrics_collect",
@@ -374,6 +414,8 @@ class NovaBrain:
             "duplicate exports": "duplicate_export_scan",
             "traceroute": "traceroute",
             "mtu test": "mtu_test",
+            "mtu": "mtu_test",
+            "max transmission unit": "mtu_test",
             "bandwidth": "bandwidth_test",
             "payload": "payload_gen",
             "generate payload": "payload_gen",
@@ -420,112 +462,45 @@ class NovaBrain:
             "device details": "device_lookup",
             "where is": "device_lookup",
             "where's": "device_lookup",
+            "nearby ip": "network_discovery",
+            "nearby devices": "network_discovery",
+            "same network": "network_discovery",
+            "same internet": "network_discovery",
+            "same connection": "network_discovery",
+            "same wi-fi": "network_discovery",
+            "same wifi": "network_discovery",
+            "same router": "network_discovery",
+            "what's on my network": "network_discovery",
+            "whats on my network": "network_discovery",
+            "who's on my network": "network_discovery",
+            "whos on my network": "network_discovery",
+            "on my network": "network_discovery",
+            "my wi-fi": "network_discovery",
+            "my wifi": "network_discovery",
+            "my router": "network_discovery",
+            "arp": "network_discovery",
+            "discover devices": "network_discovery",
+            "discover hosts": "network_discovery",
+            "lan scan": "network_discovery",
+            "local network": "network_discovery",
+            "local ip": "network_discovery",
+            "gateway": "network_discovery",
+            "ip addresses connected": "network_discovery",
+            "devices connected": "network_discovery",
+            "connected to the system": "network_discovery",
+            "scan for ip": "network_discovery",
+            "scan ip": "network_discovery",
+            "ip scanner": "network_discovery",
+            "neighbors": "network_discovery",
         }
 
         for phrase, tool_name in tool_mappings.items():
             if phrase in query_lower:
-                params = {}
-                if tool_name == "port_scan":
-                    import re
-                    port_match = re.search(r"ports?\s+(\d+[\-\d,]*)", query_lower)
-                    if port_match:
-                        params["ports"] = port_match.group(1)
-                if tool_name == "dns_resolve":
-                    import re
-                    domain_match = re.search(r"(?:dns|resolve)\s+(\S+)", query_lower)
-                    if domain_match:
-                        params["domain"] = domain_match.group(1)
-                if tool_name == "log_reader":
-                    import re
-                    search_match = re.search(r"(?:search|grep|find)\s+(.+?)(?:\s+in\s+log|\s*$)", query_lower)
-                    if search_match:
-                        params["search"] = search_match.group(1)
-                if tool_name == "payload_gen":
-                    params["category"] = "sqli" if "sqli" in query_lower else \
-                                         "xss" if "xss" in query_lower else \
-                                         "cmdi" if "cmd" in query_lower else "sqli"
-                if tool_name == "threat_scan":
-                    import re as _re
-                    url_match = _re.search(r"https?://[^\s]+", query_lower)
-                    base_url = url_match.group(0).rstrip("/") if url_match else ""
-                    host_port = _re.sub(r"^https?://", "", base_url).split("/")[0] if base_url else ""
-                    host = host_port.split(":")[0] if host_port else "127.0.0.1"
-                    port = int(host_port.split(":")[1]) if ":" in host_port else None
-                    base_url = base_url or "http://127.0.0.1:8000"
-                    if port is None:
-                        port = 443 if base_url.startswith("https") else 80
-                    actions.append({"tool": "vuln_scan", "params": {"base_url": base_url}})
-                    actions.append({"tool": "dns_resolve", "params": {"domain": host}})
-                    actions.append({"tool": "connectivity_probe", "params": {"host": host, "port": port}})
-                    actions.append({
-                        "tool": "port_scan",
-                        "params": {
-                            "host": host,
-                            "ports": "21,22,23,25,53,80,110,143,443,3306,5432,6379,8000,8080,8443,9090",
-                            "timeout": 0.8,
-                        },
-                    })
-                    continue
-                if tool_name == "packet_capture":
-                    import re as _re2
-                    proto = "all"
-                    if _re2.search(r"\bdns\b", query_lower):
-                        proto = "dns"
-                    elif "tcp" in query_lower or "http" in query_lower:
-                        proto = "tcp"
-                    host = ""
-                    ip_match = _re2.search(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", query_lower)
-                    if ip_match:
-                        host = ip_match.group(0)
-                    host_match = _re2.search(r"host\s+([a-z0-9.\-]+)", query_lower)
-                    if host_match:
-                        host = host_match.group(1)
-                    count = 25
-                    count_match = _re2.search(r"(\d+)\s+packets?", query_lower)
-                    if count_match:
-                        count = int(count_match.group(1))
-                    pcap = ""
-                    pcap_match = _re2.search(r"(?:\bfrom\s+)?([\w.\-/]+\.pcap(?:ng)?)", query_lower)
-                    if pcap_match:
-                        pcap = pcap_match.group(1)
-                    params["host"] = host
-                    params["protocol"] = proto
-                    params["count"] = count
-                    if pcap:
-                        params["pcap_file"] = pcap
-                    params["interface"] = ""
-                if tool_name == "device_lookup":
-                    import re as _re3
-                    q = ""
-                    imei_match = _re3.search(r"imei\s*[:]?\s*([0-9A-Za-z\-]+)", query_lower)
-                    serial_match = _re3.search(r"serial(?: number)?\s*[:]?\s*([0-9A-Za-z\-]+)", query_lower)
-                    if imei_match:
-                        q = imei_match.group(1)
-                    elif serial_match:
-                        q = serial_match.group(1)
-                    else:
-                        after = _re3.split(
-                            r"(?:show|give me|fetch|get)\s+(?:me\s+)?(?:the\s+)?"
-                            r"(?:full\s+)?device\s+(?:info|details|information)\s+(?:on|for|about)\s+"
-                            r"|(?:locate|track|find|lookup|ping)\s+(?:the\s+)?(?:device\s+|phone\s+)?"
-                            r"|(?:trigger|send)\s+(?:a\s+)?(?:fresh\s+|live\s+)?locate\s+(?:on|for|to)\s+"
-                            r"|(?:give me|get)\s+(?:a\s+)?(?:fresh\s+|live\s+)?(?:find\s+)?position\s+(?:for|of|on)\s+"
-                            r"|where's\s+(?:the\s+)?|where is\s+(?:the\s+)?",
-                            query,
-                        )
-                        if len(after) > 1:
-                            q = after[-1].strip().strip("?.!").strip()
-                        q = _re3.sub(r"^(?:on|for|to|of|the|a|an)\s+", "", q).strip()
-                    params["query"] = q or query.strip()
-                    params["trigger_locate"] = any(
-                        w in query_lower for w in [
-                            "locate", "track", "ping", "live", "fresh",
-                            "trigger", "now", "give me position", "find position",
-                        ]
-                    )
-                a = {"tool": tool_name, "params": params}
-                if a not in actions:
-                    actions.append(a)
+                self._append_actions(actions, self._dispatch_action(tool_name, query, query_lower))
+
+        if not actions:
+            for scored_tool in self._score_intents(query_lower):
+                self._append_actions(actions, self._dispatch_action(scored_tool, query, query_lower))
 
         if not actions:
             if any(w in query_lower for w in ["status", "overview", "dashboard", "summary", "statistics", "stats", "system state"]):
@@ -534,6 +509,174 @@ class NovaBrain:
                 return {"intent": "help", "actions": []}
 
         return {"intent": "execute", "actions": actions}
+
+    def _append_actions(self, actions: list, action_or_actions):
+        """Append a single action dict or a list of them, deduplicating."""
+        if action_or_actions is None:
+            return
+        items = action_or_actions if isinstance(action_or_actions, list) else [action_or_actions]
+        for item in items:
+            if item is not None and item not in actions:
+                actions.append(item)
+
+    def _dispatch_action(self, tool_name: str, query: str, query_lower: str) -> dict | list | None:
+        params = {}
+        if tool_name == "port_scan":
+            import re
+            port_match = re.search(r"ports?\s+(\d+[\-\d,]*)", query_lower)
+            if port_match:
+                params["ports"] = port_match.group(1)
+        if tool_name == "dns_resolve":
+            import re
+            domain_match = re.search(r"(?:dns|resolve)\s+(\S+)", query_lower)
+            if domain_match:
+                params["domain"] = domain_match.group(1)
+        if tool_name == "log_reader":
+            import re
+            search_match = re.search(r"(?:search|grep|find)\s+(.+?)(?:\s+in\s+log|\s*$)", query_lower)
+            if search_match:
+                params["search"] = search_match.group(1)
+        if tool_name == "payload_gen":
+            params["category"] = "sqli" if "sqli" in query_lower else \
+                                 "xss" if "xss" in query_lower else \
+                                 "cmdi" if "cmd" in query_lower else "sqli"
+        if tool_name == "threat_scan":
+            import re as _re
+            url_match = _re.search(r"https?://[^\s]+", query_lower)
+            base_url = url_match.group(0).rstrip("/") if url_match else ""
+            host_port = _re.sub(r"^https?://", "", base_url).split("/")[0] if base_url else ""
+            host = host_port.split(":")[0] if host_port else "127.0.0.1"
+            port = int(host_port.split(":")[1]) if ":" in host_port else None
+            base_url = base_url or "http://127.0.0.1:8000"
+            if port is None:
+                port = 443 if base_url.startswith("https") else 80
+            return [
+                {"tool": "vuln_scan", "params": {"base_url": base_url}},
+                {"tool": "dns_resolve", "params": {"domain": host}},
+                {"tool": "connectivity_probe", "params": {"host": host, "port": port}},
+                {
+                    "tool": "port_scan",
+                    "params": {
+                        "host": host,
+                        "ports": "21,22,23,25,53,80,110,143,443,3306,5432,6379,8000,8080,8443,9090",
+                        "timeout": 0.8,
+                    },
+                },
+            ]
+        if tool_name == "packet_capture":
+            import re as _re2
+            proto = "all"
+            if _re2.search(r"\bdns\b", query_lower):
+                proto = "dns"
+            elif "tcp" in query_lower or "http" in query_lower:
+                proto = "tcp"
+            host = ""
+            ip_match = _re2.search(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", query_lower)
+            if ip_match:
+                host = ip_match.group(0)
+            host_match = _re2.search(r"host\s+([a-z0-9.\-]+)", query_lower)
+            if host_match:
+                host = host_match.group(1)
+            count = 25
+            count_match = _re2.search(r"(\d+)\s+packets?", query_lower)
+            if count_match:
+                count = int(count_match.group(1))
+            pcap = ""
+            pcap_match = _re2.search(r"(?:\bfrom\s+)?([\w.\-/]+\.pcap(?:ng)?)", query_lower)
+            if pcap_match:
+                pcap = pcap_match.group(1)
+            params["host"] = host
+            params["protocol"] = proto
+            params["count"] = count
+            if pcap:
+                params["pcap_file"] = pcap
+            params["interface"] = ""
+        if tool_name == "device_lookup":
+            import re as _re3
+            q = ""
+            imei_match = _re3.search(r"imei\s*[:]?\s*([0-9A-Za-z\-]+)", query_lower)
+            serial_match = _re3.search(r"serial(?: number)?\s*[:]?\s*([0-9A-Za-z\-]+)", query_lower)
+            if imei_match:
+                q = imei_match.group(1)
+            elif serial_match:
+                q = serial_match.group(1)
+            else:
+                after = _re3.split(
+                    r"(?:show|give me|fetch|get)\s+(?:me\s+)?(?:the\s+)?"
+                    r"(?:full\s+)?device\s+(?:info|details|information)\s+(?:on|for|about)\s+"
+                    r"|(?:locate|track|find|lookup|ping)\s+(?:the\s+)?(?:device\s+|phone\s+)?"
+                    r"|(?:trigger|send)\s+(?:a\s+)?(?:fresh\s+|live\s+)?locate\s+(?:on|for|to)\s+"
+                    r"|(?:give me|get)\s+(?:a\s+)?(?:fresh\s+|live\s+)?(?:find\s+)?position\s+(?:for|of|on)\s+"
+                    r"|where's\s+(?:the\s+)?|where is\s+(?:the\s+)?",
+                    query,
+                )
+                if len(after) > 1:
+                    q = after[-1].strip().strip("?.!").strip()
+                q = _re3.sub(r"^(?:on|for|to|of|the|a|an)\s+", "", q).strip()
+            params["query"] = q or query.strip()
+            params["trigger_locate"] = any(
+                w in query_lower for w in [
+                    "locate", "track", "ping", "live", "fresh",
+                    "trigger", "now", "give me position", "find position",
+                ]
+            )
+        return {"tool": tool_name, "params": params}
+
+    def _with_scoring_fallback(self, tool_mappings: dict) -> dict:
+        return tool_mappings
+
+    def _score_intents(self, query_lower: str) -> list[str]:
+        """Deterministic keyword intent scoring for human phrasing.
+
+        Kicks in when the phrase table misses (e.g. 'can you scan for devices on
+        the same network as this computer'). A candidate intent must pass a
+        confidence floor: at least 2 keyword hits, or one highly specific hit.
+        Returns winners tied at the top score, best first, max 3.
+        """
+        keywords = {
+            "network_discovery": ["nearby", "network", "router", "wi-fi", "wifi",
+                                  "internet", "connected", "lan", "arp", "neighbor",
+                                  "neighbours", "ip addresses", "gateway", "hosts"],
+            "device_lookup": ["imei", "serial", "device", "phone", "track", "locate",
+                              "where", "position"],
+            "port_scan": ["port", "ports", "open"],
+            "vuln_scan": ["vulnerabil", "vuln", "security", "weak"],
+            "auth_scan": ["login", "password", "brute", "auth", "credentials"],
+            "crypto_audit": ["crypto", "cryptography", "tls", "cipher", "ssl"],
+            "injection_test": ["injection", "sqli", "xss", "sql", "payload test"],
+            "packet_capture": ["packet", "sniff", "wireshark", "tshark", "tcpdump",
+                               "traffic"],
+            "threat_scan": ["threat", "attack", "malware", "phishing"],
+        }
+        # A single hit only counts when the keyword is diagnostic of that intent.
+        specific = {
+            "network_discovery": {"nearby", "arp", "gateway", "router", "wi-fi", "wifi"},
+            "device_lookup": {"imei", "serial"},
+            "packet_capture": {"wireshark", "tshark", "tcpdump", "sniff", "packet"},
+            "vuln_scan": {"vulnerabil"},
+            "auth_scan": {"brute", "password", "login"},
+            "crypto_audit": {"cipher", "cryptography", "tls"},
+            "injection_test": {"injection", "sqli"},
+            "threat_scan": {"threat", "malware"},
+        }
+        matches = []
+        for tool, keys in keywords.items():
+            hits = [k for k in keys if k in query_lower]
+            if not hits:
+                continue
+            eligible = len(hits) >= 2 or any(k in specific.get(tool, set()) and k in hits for k in hits)
+            if eligible:
+                matches.append((tool, len(hits)))
+        if not matches:
+            return []
+        best = max(s for _, s in matches)
+        winners = [t for t, s in matches if s >= best]
+        seen, ordered = set(), []
+        for w in winners:
+            if w not in seen:
+                seen.add(w)
+                ordered.append(w)
+        return ordered[:3]
 
     def _synthesize_response(self, query: str, results: dict) -> str:
         if not results:
@@ -866,6 +1009,7 @@ class NovaBrain:
             "payload_gen": lambda o: f"Generated {o.get('count', 0)} {o.get('category', '')} payloads",
             "packet_capture": lambda o: format_packet_capture(o, 0),
             "device_lookup": lambda o: format_device_lookup(o, 0),
+            "network_discovery": lambda o: format_network_discovery(o, 0),
         }
 
         formatter = formatters.get(tool_name)
