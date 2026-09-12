@@ -1416,7 +1416,7 @@ class NovaDeterministicShield:
         }
 
     def process_deterministic_fallback(self, system_prompt: str = "", task_input: str = "") -> dict:
-        logger.warning("[SHIELD ACTIVE] Executing deterministic fallback processing.")
+        logger.debug("[SHIELD ACTIVE] Executing deterministic fallback processing.")
         start = time.time()
 
         detected_anomalies = self.scan_input(task_input)

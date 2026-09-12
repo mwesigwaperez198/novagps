@@ -4,6 +4,7 @@ Import and call register_nova_routes(app) from main.py to
 add all NOVA-CORE agent endpoints.
 """
 
+import re
 import time
 import sys
 from pathlib import Path
@@ -440,7 +441,6 @@ async def nova_shield_emit(req: NovaShieldEmitRequest):
 
 
 _INTENT_MAP = [
-    ("greeting", ["hey", "hello", "hi ", "hi,", "who are you", "what can you do", "help me"]),
     ("system_health", ["system health", "analyze system", "health check", "check health",
                         "system status", "server status", "system info"]),
     ("port_scan", ["port scan", "open ports", "scan ports", "check ports"]),
@@ -469,9 +469,20 @@ _INTENT_MAP = [
     ("device_enum", ["list devices", "usb device", "enum device"]),
 ]
 
+_GREETING_WORDS = {"hi", "hiya", "hey", "hello", "yo", "sup", "morning", "afternoon", "evening"}
+_GREETING_PHRASES = (
+    "hi there", "hey there", "hello lau", "hay lau", "who are you", "what do you do",
+    "what can you do", "how are you", "how's it going", "how's life", "how are things",
+    "good morning", "good afternoon", "good evening", "good night", "are you there",
+    "you there", "what's up", "help me",
+)
+
 
 def _classify_intent(command):
     c = command.lower()
+    words = set(re.findall(r"[a-z']+", c))
+    if words & _GREETING_WORDS or any(p in c for p in _GREETING_PHRASES):
+        return {"category": "greeting", "confidence": "high"}
     for category, patterns in _INTENT_MAP:
         if any(p in c for p in patterns):
             return {"category": category, "confidence": "high"}

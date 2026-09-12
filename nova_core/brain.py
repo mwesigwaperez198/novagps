@@ -336,7 +336,19 @@ class NovaBrain:
                 parts.append(f"LLM error: {llm_resp.get('error')}")
 
         if "_reasoning" in results:
+            only_reasoning = len(results) == 1
             reasoning = results.pop("_reasoning")
+            if only_reasoning and reasoning.get("success"):
+                output = reasoning.get("output")
+                if isinstance(output, dict):
+                    engine = output.get("engine", "")
+                    payload = output.get("output_payload") or {}
+                    verdict = str(payload.get("verdict", ""))
+                    benign = "NOMINAL" in verdict and not payload.get("alert_badges")
+                    if engine != "EMBEDDED_LLM" and benign:
+                        # No model online and no threat raised — answer like a person,
+                        # not like a log sink.
+                        return self._conversational_response(query)
             if reasoning.get("success"):
                 output = reasoning.get("output")
                 if isinstance(output, dict):
@@ -377,6 +389,42 @@ class NovaBrain:
                     parts.append(f"  - {l['obstacle'][:80]}")
 
         return "\n\n".join(parts)
+
+    def _conversational_response(self, query: str) -> str:
+        """Deterministic-mode chit-chat: echo, stay in character, stay honest."""
+        q = query.strip()
+        lowered = q.lower()
+        stats = self.memory.get_memory_stats()
+
+        if any(p in lowered for p in (
+            "how are you", "how's it going", "how's life", "how are things",
+            "are you ok", "are you okay", "you alive", "you awake",
+        )):
+            return (
+                f"I'm sharp — all systems green, running on the {self.engine_used} engine, "
+                f"{stats.get('total_lessons', 0)} lessons banked in memory. "
+                f"What do you want me to tackle, boss?"
+            )
+
+        if any(p in lowered for p in ("thank", "thanks", "appreciate", "good job", "nice work")):
+            return "Any time. Keep the platform healthy and nobody can touch it. What's next?"
+
+        if any(p in lowered for p in (
+            "what do you do", "what can you do", "what are you capable", "your skills",
+            "show me what", "capabilities",
+        )):
+            return self._help_text()
+
+        if any(p in lowered for p in ("are you there", "you there", "are you alive", "are you awake")):
+            return "Always. I'm awake, memory intact, engines warm. Give me a target and I'm yours."
+
+        tool_names = ", ".join(t["name"] for t in self.tools.list_tools()[:10])
+        return (
+            f"I heard you say: \"{q}\". "
+            f"The reasoning model isn't connected right now, so I won't fake a free-form answer — "
+            f"but I'm fully operational on tools. Ask me to \"scan open ports\", \"system status\", "
+            f"\"run the shield validators\", or name any of these and I'll execute it: {tool_names}."
+        )
 
     def _format_output(self, tool_name: str, output: dict) -> str:
         formatters = {

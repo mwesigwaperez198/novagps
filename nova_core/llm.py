@@ -24,9 +24,11 @@ class NovaLLM:
         self.agent_name = cfg.agent_name
         self._available: Optional[bool] = None
         self._latency_ms = 0.0
+        self._checked_at = 0.0
+        self._availability_ttl = 20.0
 
     def check_availability(self) -> dict:
-        if self._available is not None:
+        if self._available is not None and time.time() - self._checked_at < self._availability_ttl:
             return {
                 "available": self._available,
                 "host": self.host,
@@ -46,6 +48,7 @@ class NovaLLM:
 
             models = [m.get("name", "") for m in data.get("models", [])]
             self._available = True
+            self._checked_at = time.time()
 
             if not any(self.model in m for m in models):
                 available = ", ".join(models) if models else "none"
@@ -63,6 +66,7 @@ class NovaLLM:
             }
         except Exception as e:
             self._available = False
+            self._checked_at = time.time()
             logger.info("Ollama not reachable at %s: %s", self.host, e)
             return {"available": False, "host": self.host, "error": str(e)}
 
