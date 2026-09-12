@@ -23,34 +23,38 @@ services:
         value: portable
       - key: ENVIRONMENT
         value: production
-      # AUTO_ENROLL=1 lets any device with a configured identifier phone home and
-      # self-register on first contact (device + consent auto-created). Keep for
-      # the cross-device live test; set to 0/remove when you want strict manual
-      # registration back.
       - key: AUTO_ENROLL
         value: "1"
       - key: DATA_DIR
         value: /var/data
       - key: DATABASE_URL
         value: sqlite:////var/data/nova.sqlite3
-      # NOVA-CORE embedded brain: downloads a small GGUF into /var/data/nova_vault/models
-      # on first boot and runs llama.cpp in-process. Falls back to the deterministic
-      # shield when the instance RAM cannot fit a model.
+      # LAU embedded brain — llama.cpp runs in-process on the persistent disk.
+      # Tuned for Render starter (512 MB RAM): smallest Q2_K model (~230 MB),
+      # 512-token context, mmap enabled, 20s boot delay so health check passes
+      # before the model download begins.
       - key: NOVA_EMBEDDED
-        value: "1"
+        value: "0"
       - key: NOVA_LLM_BACKEND
-        value: embedded
+        value: shield
       - key: NOVA_AGENT_NAME
         value: LAU
+      - key: NOVA_EMBEDDED_CTX
+        value: "512"
+      - key: NOVA_EMBEDDED_TOKENS
+        value: "128"
+      - key: NOVA_EMBEDDED_THREADS
+        value: "1"
+      - key: NOVA_MEM_RESERVE_MB
+        value: "128"
       - key: SECRET_KEY
         sync: false
       - key: DEV_OWNER_EMAIL
         sync: false
       - key: OWNER_PASSWORD
         sync: false
-      # Internal self-referencing keep-alive loop: the app pings its own public
-      # health URL every KEEPALIVE_INTERVAL seconds (default 240) from a background
-      # task, so Render never counts the service as idle / spins it down.
+      # Internal keep-alive: pings own /health every 240s so Render never idles
+      # the service. GitHub Actions also pings every 5 min as external backup.
       - key: KEEPALIVE_URL
         value: https://novagps.onrender.com
       - key: KEEPALIVE_INTERVAL

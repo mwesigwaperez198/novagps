@@ -94,6 +94,11 @@ class NovaCognitiveEngine:
     _BOOT_DELAY_S: int = 20
 
     def start_async(self):
+        if not self.cfg.embedded_enabled:
+            self.state = "shield_only"
+            self.engine_used = "DETERMINISTIC_SHIELD"
+            logger.info("NOVA_EMBEDDED=0 — deterministic shield engaged, llama skipped.")
+            return
         if self._init_thread and self._init_thread.is_alive():
             return
         self._init_thread = threading.Thread(
@@ -191,6 +196,7 @@ class NovaCognitiveEngine:
                 [sys.executable, "-c", probe],
                 timeout=20,
                 capture_output=True,
+                start_new_session=True,  # isolate from parent process group
             )
             # returncode 0 = success (shouldn't happen — file doesn't exist)
             # returncode 1 = Python exception (file not found) = .so is safe
