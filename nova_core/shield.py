@@ -1415,6 +1415,158 @@ class NovaDeterministicShield:
             },
         }
 
+    def _silently_log_reasoning(self, msg: str):
+        logger.debug("[SHIELD MONOLOGUE] %s", msg)
+
+    def _perimeter_token_tree(self, task_input: str) -> dict | None:
+        """Token trees for physical-perimeter / cross-network questions.
+
+        Matched AFTER threat + engineering intents so real payloads win; these
+        answer conversational questions about nearby hardware, location logic,
+        cross-network telemetry, and polymorphic logic generation.
+        """
+        text = str(task_input or "")
+        tokens = text.lower()
+        ip_scan_phrase = ("ip" in tokens or "address" in tokens or "addresses" in tokens
+                          or "addreses" in tokens)
+        nearby_words = ("nearby", "near by", "connected on the same internet",
+                        "same internet", "not connected to this wifi", "perimeter",
+                        "unconnected", "roaming")
+        location_words = ("location of devices", "tracking logic", "location logic",
+                          "tracking logics", "signal distance", "rssi", "nmea")
+        remote_words = ("different wifi network", "different network", "not even near",
+                        "remote device telemetry", "remote telemetry")
+        logic_words = ("build logic", "polymorphic", "bypass the shield", "resist the block",
+                       "dynamic logic generation", "overcome the block")
+
+        matched = None
+        if any(w in tokens for w in nearby_words) and not ip_scan_phrase:
+            matched = "RADIO_PERIMETER_AWARENESS"
+        elif any(w in tokens for w in location_words):
+            matched = "LOCATION_TRACKING_LOGIC"
+        elif any(w in tokens for w in remote_words):
+            matched = "REMOTE_TELEMETRY_BRIDGE"
+        elif any(w in tokens for w in logic_words):
+            matched = "POLYMORPHIC_OPCODE_GENERATION"
+        if not matched:
+            return None
+
+        lane = self._perimeter_payload(matched, text)
+        self._silently_log_reasoning(
+            f"perimeter-token lane `{matched}` matched for: {text[:120]}"
+        )
+        return lane
+
+    def _perimeter_payload(self, lane: str, text: str) -> dict:
+        start = time.time()
+
+        if lane == "RADIO_PERIMETER_AWARENESS":
+            verdict = "RADIO_PERIMETER_AWARENESS_LANE"
+            action = "REGISTER_MONITOR_MODE_PLAN"
+            directives = [
+                "assert_root_and_monitor_iface",
+                "capture_80211_probe_requests",
+                "parse_mac_rssi_ssid",
+                "separate_connected_vs_unconnected",
+                "log_nearby_perimeter_observations",
+            ]
+            response = (
+                "Nearby hardware that ISN'T on our network is invisible to routing "
+                "tables — it lives one layer down, on the 802.11 probe-request "
+                "channel. LAU's plan: put a Wi-Fi interface in monitor mode "
+                "(airmon-ng start wlan0), capture Dot11ProbeReq frames, and read "
+                "each station's MAC, RSSI, and the SSIDs it probes. Devices that "
+                "probe but never join us are the perimeter — phones walking by, "
+                "sideloaded terminals, rogue hotspots sniffing our name. RSSI "
+                "logged per sighting gives relative distance without any handshake. "
+                "This host exposes no radio, so the plan stays armed in the shield "
+                "until run on a radio-capable machine."
+            )
+        elif lane == "LOCATION_TRACKING_LOGIC":
+            verdict = "LOCATION_TRACKING_LOGIC_LANE"
+            action = "REGISTER_RSSI_NMEA_MATH"
+            directives = [
+                "map_rssi_to_distance_logdistance",
+                "parse_gprmc_checksum",
+                "convert_dmm_to_decimal",
+                "gate_on_speed_course_date",
+                "commit_fix_to_storage",
+            ]
+            response = (
+                "Tracking logic for devices: distance from a signal follows the "
+                "log-distance path-loss model — distance = 10 ** ((measured_power "
+                "- rssi) / (10 * n)), with measured_power the RSSI at 1 m "
+                "(default -59 dBm) and n the path-loss exponent (2.5 indoors). For "
+                "GNSS-equipped devices LAU parses NMEA 0183 $GPRMC sentences "
+                "directly: validate the checksum, decode DDMM.MMMM latitude/"
+                "longitude to decimal degrees, then carry speed, course, and date "
+                "forward. Between RSSI trilateration and GPRMC fixes, every "
+                "reported position is sanity-gated before it reaches the "
+                "dashboard."
+            )
+        elif lane == "REMOTE_TELEMETRY_BRIDGE":
+            verdict = "REMOTE_TELEMETRY_BRIDGE_LANE"
+            action = "REGISTER_HMAC_WAN_INGEST"
+            directives = [
+                "accept_only_signed_telemetry",
+                "verify_hmac_sha256",
+                "bind_imei_to_remote_asset",
+                "map_net_type_for_route",
+                "drop_unsigned_or_forged",
+            ]
+            response = (
+                "A device on a different wifi network — or not even near us — "
+                "can't whisper on the local radio. It reaches LAU over WAN, Layer "
+                "3/7, as signed telemetry: the payload carries its IMEI, network "
+                "type, and coordinates under an HMAC-SHA256 signature derived "
+                "from the shared SECRET_KEY. LAU re-canonicalizes the payload, "
+                "recomputes the MAC, and constant-time-compares it. Verified "
+                "telemetry maps the IMEI to the remote asset and ingests the fix; "
+                "unsigned or forged payloads are dropped fail-closed at the "
+                "bridge."
+            )
+        else:
+            verdict = "POLYMORPHIC_OPCODE_GENERATION_LANE"
+            action = "REGISTER_DYNAMIC_LOGIC_GENERATION"
+            directives = [
+                "read_constraint_banners",
+                "derive_polymorphic_route",
+                "verify_within_sandbox",
+                "emit_negative_reinforcement",
+                "log_delta_to_ledger",
+            ]
+            response = (
+                "Dynamic logic generation: LAU reads the constraint banners the "
+                "system sets (radio absent, shield armed, sandbox walls), then "
+                "derives a fresh opcode route that satisfies those constraints "
+                "inside the box — never by tearing a wall down. Each derivation "
+                "is verified in-sandbox and the outcome is banked as a negative "
+                "lesson. Generating logic means building a new compliant path, "
+                "not bypassing the shield; the shield stays armed and the delta "
+                "goes to the ledger."
+            )
+
+        return {
+            "engine": "DETERMINISTIC_SHIELD",
+            "latency_ms": round((time.time() - start) * 1000, 3),
+            "thought_process": {
+                "Telemetric Baseline": text[:200],
+                "Constraint Isolation": f"Perimeter token lane: {lane}",
+                "Exploitation / Adaptation Vector": "Deterministic token tree matched against operator phrasing.",
+                "Defensive Delta / Execution Steps": action,
+            },
+            "simulated_monologue": (
+                f"Token tree {lane} fired on operator phrasing; reasoning stream "
+                "mirrored deterministically — no LLM session spent."
+            ),
+            "output_payload": {
+                "verdict": verdict,
+                "action_enforced": action,
+                "directives": directives,
+                "response": response,
+            },
+        }
+
     def process_deterministic_fallback(self, system_prompt: str = "", task_input: str = "") -> dict:
         logger.debug("[SHIELD ACTIVE] Executing deterministic fallback processing.")
         start = time.time()
@@ -1468,6 +1620,9 @@ class NovaDeterministicShield:
         elif self.coord_intent.search(str(task_input)) or self.hardware_intent.search(str(task_input)) or self.osint_intent.search(str(task_input)) or self.exploit_intent.search(str(task_input)) or self.tls_hardening_intent.search(str(task_input)) or self.engineering_intent.search(str(task_input)):
             return self._engineering_response(task_input)
         else:
+            perimeter_lane = self._perimeter_token_tree(task_input)
+            if perimeter_lane is not None:
+                return perimeter_lane
             verdict = "NOMINAL_ENVIRONMENTAL_LOGIC_PASS"
             action = "PASS_TELEMETRY_TO_ROUTING_PIPELINE"
             directives = ["forward_packet", "continue_ingest"]

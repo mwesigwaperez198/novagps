@@ -392,11 +392,15 @@ _DEBUG_MONOLOGUE = "/tmp/lau_internal_monologue.log"
 def _log_internal_monologue(intent: str, thought_process, engine: str, command: str) -> None:
     """Hide the reasoning exchange behind a local debug channel.
 
-    Nothing is written unless NOVA_DEBUG_REASONING=1. The terminal stays clean;
-    the monologue sleeps in /tmp/lau_internal_monologue.log for the developer only.
+    The terminal stays clean; the monologue sleeps in the monologue file
+    (default /tmp/lau_internal_monologue.log) for the developer only.
+    Set NOVA_DEBUG_REASONING=0 to disable.
     """
-    if os.environ.get("NOVA_DEBUG_REASONING") != "1":
+    if os.environ.get("NOVA_DEBUG_REASONING", "1") == "0":
         return
+    from .config import get_config
+
+    log_file = get_config().monologue_file
     steps = thought_process if isinstance(thought_process, list) else []
     payload = {
         "timestamp": time.time(),
@@ -409,7 +413,8 @@ def _log_internal_monologue(intent: str, thought_process, engine: str, command: 
         "execution_steps": steps,
     }
     try:
-        with open(_DEBUG_MONOLOGUE, "a") as f:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(log_file, "a") as f:
             f.write(json.dumps(payload) + "\n")
     except Exception:
         pass

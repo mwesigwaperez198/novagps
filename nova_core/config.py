@@ -17,6 +17,7 @@ class NovaCoreConfig:
     memory_db: Path = field(default_factory=lambda: Path(os.environ.get("NOVA_MEMORY_DB", "/var/data/nova_vault/local_memory.db")))
     escrow_bin: Path = field(default_factory=lambda: Path(os.environ.get("NOVA_ESCROW_BIN", "/var/data/nova_vault/secure_escrow.bin")))
     alert_file: Path = field(default_factory=lambda: Path(os.environ.get("NOVA_ALERT_FILE", "/var/data/nova_vault/alerts.json")))
+    monologue_file: Path = field(default_factory=lambda: Path(os.environ.get("NOVA_MONOLOGUE_FILE", "/tmp/lau_internal_monologue.log")))
 
     backend_url: str = field(default_factory=lambda: os.environ.get("NOVA_BACKEND_URL", "http://127.0.0.1:8000"))
     backend_token: str = field(default_factory=lambda: os.environ.get("NOVA_TOKEN", ""))

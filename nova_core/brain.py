@@ -106,6 +106,68 @@ def format_device_lookup(o: dict, indent: int = 0) -> str:
     return ("\n" + pad).join(lines)
 
 
+def format_radio_sniffer(o: dict, indent: int = 0) -> str:
+    """Render a physical-perimeter radio scan as an honest access report."""
+    pad = " " * indent
+    lines = [
+        f"physical perimeter · probes_owned={o.get('probe_request_capture_owned')} "
+        f"ble={o.get('ble_scan_owned')} iface={o.get('interface') or '—'}"
+    ]
+    devices = o.get("unconnected_devices") or []
+    lines.append(f"{len(devices)} unconnected device(s) seen")
+    for d in devices[:20]:
+        ssids = ", ".join(s for s in d.get("ssid_probed") or [] if s) or "—"
+        lines.append(f"  {d.get('mac', '?')}  rssi={d.get('rssi') or '—'}  probed={ssids}")
+    if o.get("hint"):
+        lines.append(f"  {o['hint']}")
+    return ("\n" + pad).join(lines)
+
+
+def format_location_engine(o: dict, indent: int = 0) -> str:
+    """Render RSSI-distance and NMEA parse output."""
+    pad = " " * indent
+    lines = []
+    math_out = o.get("math")
+    if math_out is not None:
+        m = math_out if isinstance(math_out, dict) else {"distance_m": math_out}
+        lines.append(
+            f"rssi={m.get('rssi', '?')} → {m.get('distance_m', '?')} m "
+            f"(1m ref {m.get('measured_power', -59)} dBm, n={m.get('n', 2.5)})"
+            if isinstance(m, dict) else f"distance: {math_out} m"
+        )
+    nmea = o.get("nmea")
+    if nmea:
+        if nmea.get("error"):
+            lines.append(f"NMEA: rejected ({nmea['error']})")
+        else:
+            lines.append(
+                f"NMEA fix: {nmea.get('lat')},{nmea.get('lon')} "
+                f"speed={nmea.get('speed_knots')}kn course={nmea.get('course_deg')}° "
+                f"({nmea.get('date')} {nmea.get('utc')})"
+            )
+    elif o.get("example"):
+        lines.append("no sentence supplied; parser ready")
+        lines.append(f"  example: {o['example']}")
+    return ("\n" + pad).join(lines) if lines else "no location input"
+
+
+def format_remote_bridge(o: dict, indent: int = 0) -> str:
+    """Render HMAC telemetry bridge verification."""
+    pad = " " * indent
+    if o.get("note"):
+        return f"remote bridge · configured={o.get('configured')} · {o['note']}"
+    lines = [
+        f"remote bridge · {'VERIFIED' if o.get('verified') else 'REJECTED'} · {o.get('action', '')}"
+    ]
+    lines.append(
+        f"  device={o.get('device_id') or '—'} imei={o.get('imei') or '—'} "
+        f"net={o.get('net_type') or '—'}"
+    )
+    if o.get("lat") is not None and o.get("lon") is not None:
+        lines.append(f"  fix={o.get('lat')},{o.get('lon')}")
+    return ("\n" + pad).join(lines)
+
+
 def format_packet_capture(o: dict, indent: int = 0) -> str:
     """Render a packet capture result as a readable traffic panel."""
     pad = " " * indent
@@ -499,6 +561,34 @@ class NovaBrain:
             "scan ip": "network_discovery",
             "ip scanner": "network_discovery",
             "neighbors": "network_discovery",
+            "near by ip": "network_discovery",
+            "near by": "network_discovery",
+            "addreses": "network_discovery",
+            "nearby hardware": "radio_sniffer",
+            "unconnected devices": "radio_sniffer",
+            "not connected to this wifi": "radio_sniffer",
+            "not on our network": "radio_sniffer",
+            "radio scan": "radio_sniffer",
+            "monitor mode": "radio_sniffer",
+            "probe request": "radio_sniffer",
+            "ble scan": "radio_sniffer",
+            "bluetooth scan": "radio_sniffer",
+            "roaming devices": "radio_sniffer",
+            "physical perimeter": "radio_sniffer",
+            "location logic": "location_engine",
+            "tracking logic": "location_engine",
+            "rssi": "location_engine",
+            "signal distance": "location_engine",
+            "distance from signal": "location_engine",
+            "nmea": "location_engine",
+            "gprmc": "location_engine",
+            "different wifi network": "remote_bridge",
+            "different network": "remote_bridge",
+            "not even near": "remote_bridge",
+            "remote device": "remote_bridge",
+            "remote telemetry": "remote_bridge",
+            "hmac": "remote_bridge",
+            "verify telemetry": "remote_bridge",
         }
 
         for phrase, tool_name in tool_mappings.items():
@@ -631,6 +721,20 @@ class NovaBrain:
                     "trigger", "now", "give me position", "find position",
                 ]
             )
+        if tool_name == "radio_sniffer":
+            import re as _re4
+            params["scan_ble"] = any(w in query_lower for w in ["ble", "bluetooth"])
+            dur = _re4.search(r"(\d+)\s*(?:sec|second|s\b)", query_lower)
+            if dur:
+                params["duration"] = int(dur.group(1))
+        if tool_name == "location_engine":
+            import re as _re5
+            rssi_match = _re5.search(r"rssi\s*(?:of|is|=|:)?\s*(-?\d+(?:\.\d+)?)", query_lower)
+            if rssi_match:
+                params["rssi"] = float(rssi_match.group(1))
+            nmea_match = _re5.search(r"(\$GPRMC[^\s]*)", query)
+            if nmea_match:
+                params["sentence"] = nmea_match.group(1)
         return {"tool": tool_name, "params": params}
 
     def _with_scoring_fallback(self, tool_mappings: dict) -> dict:
@@ -658,6 +762,12 @@ class NovaBrain:
             "packet_capture": ["packet", "sniff", "wireshark", "tshark", "tcpdump",
                                "traffic"],
             "threat_scan": ["threat", "attack", "malware", "phishing"],
+            "radio_sniffer": ["radio", "probe request", "monitor mode", "bluetooth",
+                              "ble", "unconnected", "roaming", "perimeter"],
+            "location_engine": ["rssi", "nmea", "gprmc", "signal strength",
+                                "distance from signal", "tracking logic"],
+            "remote_bridge": ["different network", "remote telemetry", "hmac",
+                              "not even near", "remote device", "different wifi"],
         }
         # A single hit only counts when the keyword is diagnostic of that intent.
         specific = {
@@ -669,6 +779,9 @@ class NovaBrain:
             "crypto_audit": {"cipher", "cryptography", "tls"},
             "injection_test": {"injection", "sqli"},
             "threat_scan": {"threat", "malware"},
+            "radio_sniffer": {"rssi", "probe request", "monitor mode", "radio"},
+            "location_engine": {"rssi", "nmea", "gprmc"},
+            "remote_bridge": {"hmac", "different network"},
         }
         matches = []
         for tool, keys in keywords.items():
@@ -834,7 +947,9 @@ class NovaBrain:
             "identify yourself", "what's your name", "what is your name"))
         asking_caps = any(p in c for p in (
             "what can you do", "what do you do", "capabilities", "your skills",
-            "what tools", "help me", "show me what", "what are you capable"))
+            "what tools", "how many tools", "help me", "show me what",
+            "what are you capable", "tools do you run", "capable of doing",
+            "u capable", "you capable"))
         asking_state = any(p in c for p in (
             "how are you", "how's it going", "how's life", "how are things",
             "you ok", "you alive", "you awake", "are you up"))
@@ -958,10 +1073,15 @@ class NovaBrain:
         elif asking_name:
             body = f"I'm {name}, the {role} — every pipeline, device, and perimeter here answers to me. {invite}"
         elif asking_caps:
-            names = ", ".join(t["name"] for t in tools[:12])
+            by_cat = {}
+            for t in tools:
+                by_cat.setdefault(t["category"], []).append(t["name"])
+            cat_count = ", ".join(f"{cat}:{len(items)}" for cat, items in sorted(by_cat.items()))
+            names = ", ".join(t["name"] for t in tools[:14] if not t.get("hide_from_caps"))
             body = (
-                f"I run {len(tools)} tools live — {names} — backed by the shield "
-                f"and the device command chain. {invite}"
+                f"I run {len(tools)} tools live — {cat_count}. Loadout: {names}. "
+                f"Backed by the shield, the device command chain, and the sovereign "
+                f"provisioning lane. {invite}"
             )
         elif asking_state:
             body = (
@@ -1021,6 +1141,9 @@ class NovaBrain:
             "packet_capture": lambda o: format_packet_capture(o, 0),
             "device_lookup": lambda o: format_device_lookup(o, 0),
             "network_discovery": lambda o: format_network_discovery(o, 0),
+            "radio_sniffer": lambda o: format_radio_sniffer(o, 0),
+            "location_engine": lambda o: format_location_engine(o, 0),
+            "remote_bridge": lambda o: format_remote_bridge(o, 0),
         }
 
         formatter = formatters.get(tool_name)

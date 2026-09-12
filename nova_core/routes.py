@@ -49,6 +49,16 @@ _agent_start_time = time.time()
 _brain_instance = None
 _brain_init_error = None
 
+_provision_machine = None
+
+
+def _get_provision_machine():
+    global _provision_machine
+    if _provision_machine is None:
+        from nova_core.state_machine import LauSovereignStateMachine
+        _provision_machine = LauSovereignStateMachine()
+    return _provision_machine
+
 
 def _get_brain():
     global _brain_instance, _brain_init_error
@@ -558,6 +568,14 @@ async def run_dispatch(command: str, device_id: str = "") -> dict:
     """
     command = (command or "").strip()
     device_id = device_id or ""
+
+    try:
+        prov = _get_provision_machine()
+        provision_reply = prov.route(command)
+        if provision_reply is not None:
+            return provision_reply
+    except Exception:
+        pass
 
     if _STRONG_HOSTILE.search(command):
         detected_hostile = _threat_scan(command)
