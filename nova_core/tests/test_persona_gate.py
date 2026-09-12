@@ -155,3 +155,52 @@ class TestPacketCapture:
             r = PacketCapture().execute(duration=1, count=5, protocol="all")
             assert r.success is False
             assert "shark" in r.error or "tcpdump" in r.error or "raw socket" in r.error
+
+
+class TestDeviceLookup:
+    def test_parse_imei(self):
+        from nova_core.brain import NovaBrain
+        parsed = NovaBrain()._parse_request("locate device with imei 355985051234567")
+        acts = [a for a in parsed["actions"] if a["tool"] == "device_lookup"]
+        assert len(acts) == 1
+        assert acts[0]["params"]["query"] == "355985051234567"
+
+    def test_parse_serial(self):
+        from nova_core.brain import NovaBrain
+        parsed = NovaBrain()._parse_request("track device serial SN-0942")
+        acts = [a for a in parsed["actions"] if a["tool"] == "device_lookup"]
+        assert acts[0]["params"]["query"] == "sn-0942"
+
+    def test_parse_generic_name(self):
+        from nova_core.brain import NovaBrain
+        parsed = NovaBrain()._parse_request("show device info for test-phone")
+        acts = [a for a in parsed["actions"] if a["tool"] == "device_lookup"]
+        assert acts[0]["params"]["query"] == "test-phone"
+
+    def test_tool_registered(self):
+        from nova_core.tools import get_registry
+        reg = get_registry()
+        assert "device_lookup" in reg._tools
+
+    def test_format_device_card(self):
+        from nova_core.brain import format_device_lookup
+        s = format_device_lookup({
+            "query": "355985051234567",
+            "device_count": 1,
+            "devices": [{
+                "id": "d1", "name": "S21", "identifier": "phone-1",
+                "imei": "355985051234567", "serial": None,
+                "model": "Galaxy S21", "manufacturer": "Samsung",
+                "os_type": "android", "os_version": "14",
+                "ip_address": "94.1.2.3", "local_ip": "192.168.1.42",
+                "carrier": "MTN", "active": True, "lost_mode": False,
+                "last_lat": 0.347596, "last_lon": 32.582520,
+                "last_speed": 1.2, "last_place": "Kampala",
+                "last_seen": "2026-09-12T10:00:00",
+            }],
+        })
+        assert "S21" in s
+        assert "imei=355985051234567" in s
+        assert "0.347596,32.58252" in s
+        assert "ACTIVE" in s
+        assert "MTN" in s

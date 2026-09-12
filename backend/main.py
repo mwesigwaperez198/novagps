@@ -238,12 +238,21 @@ def auth_login(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email and password are required")
     settings = get_settings()
     owner = settings.dev_owner_email.strip().lower()
-    # Production requires the owner allowlist to be configured (fail closed).
+    # Production is fail-closed: the owner allowlist AND a real password must
+    # both be configured. Never default to a weak or empty credential.
     if settings.environment == "production" and not owner:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    if settings.environment == "production" and not settings.owner_password:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Server not configured for login")
     # Only the configured owner may log in, in every environment. This is the
     # security boundary chosen for NOVA (a personal, consent-first tracker).
     if owner and email.strip().lower() != owner:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    # Real credential check: the allowlist stops strangers, but the password
+    # stops anyone who simply knows the owner's email. Constant-time compare.
+    if settings.owner_password and not secrets.compare_digest(
+        password.encode("utf-8"), settings.owner_password.encode("utf-8")
+    ):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     token = jwt.encode(
         {"sub": email, "role": "admin"},
@@ -840,6 +849,7 @@ def search_devices(
                 Device.phone.ilike(like),
                 Device.identifier.ilike(like),
                 Device.serial.ilike(like),
+                Device.imei.ilike(like),
             )
         )
         .limit(100)

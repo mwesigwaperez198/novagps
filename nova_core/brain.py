@@ -25,6 +25,50 @@ from .tools import get_registry, ToolRegistry
 logger = logging.getLogger("nova_core.brain")
 
 
+def format_device_lookup(o: dict, indent: int = 0) -> str:
+    """Render a device lookup (IMEI/serial/identifier) result as a device card."""
+    pad = " " * indent
+    count = o.get("device_count", 0)
+    if count == 0:
+        return f"0 devices for '{o.get('query', '')}': {o.get('message', 'no match')}"
+    lines = [f"{count} device(s) for '{o.get('query', '')}'"]
+    for d in o.get("devices") or []:
+        ident = d.get("name") or d.get("identifier") or d.get("id", "?")
+        lines.append(f"• {ident}")
+        lines.append(f"  imei={d.get('imei') or '—'} serial={d.get('serial') or '—'}")
+        lines.append(
+            f"  model={d.get('model') or '?'} {d.get('manufacturer') or ''} {d.get('os_type') or ''}"
+            f" {d.get('os_version') or ''} ({d.get('device_type') or '?'})"
+        )
+        ip_row = []
+        if d.get("ip_address"):
+            ip_row.append(f"public {d['ip_address']}")
+        if d.get("local_ip"):
+            ip_row.append(f"local {d['local_ip']}")
+        if d.get("carrier"):
+            ip_row.append(f"carrier {d['carrier']}")
+        if ip_row:
+            lines.append(f"  {', '.join(ip_row)}")
+        state = "ACTIVE" if d.get("active") else "INACTIVE"
+        if d.get("lost_mode"):
+            state += " · LOST MODE"
+        lines.append(f"  {state}")
+        if d.get("last_lat") is not None and d.get("last_lon") is not None:
+            place = d.get("last_place")
+            place_s = f" near {place}" if place else ""
+            speed = d.get("last_speed")
+            speed_s = f" @ {speed} m/s" if speed is not None else ""
+            lat = f"{float(d['last_lat']):.6f}".rstrip("0").rstrip(".")
+            lon = f"{float(d['last_lon']):.6f}".rstrip("0").rstrip(".")
+            lines.append(
+                f"  last fix: {lat},{lon}{place_s}{speed_s}"
+                f"  ({d.get('last_seen') or 'unknown'})"
+            )
+        else:
+            lines.append("  last fix: none yet")
+    return ("\n" + pad).join(lines)
+
+
 def format_packet_capture(o: dict, indent: int = 0) -> str:
     """Render a packet capture result as a readable traffic panel."""
     pad = " " * indent
@@ -346,6 +390,16 @@ class NovaBrain:
             "tcpdump": "packet_capture",
             "who is talking": "packet_capture",
             "network traffic": "packet_capture",
+            "find device": "device_lookup",
+            "lookup device": "device_lookup",
+            "locate device": "device_lookup",
+            "track device": "device_lookup",
+            "imei": "device_lookup",
+            "serial number": "device_lookup",
+            "device info": "device_lookup",
+            "device details": "device_lookup",
+            "where is": "device_lookup",
+            "where's": "device_lookup",
         }
 
         for phrase, tool_name in tool_mappings.items():
@@ -420,7 +474,29 @@ class NovaBrain:
                     if pcap:
                         params["pcap_file"] = pcap
                     params["interface"] = ""
-                actions.append({"tool": tool_name, "params": params})
+                if tool_name == "device_lookup":
+                    import re as _re3
+                    q = ""
+                    imei_match = _re3.search(r"imei\s*[:]?\s*([0-9A-Za-z\-]+)", query_lower)
+                    serial_match = _re3.search(r"serial(?: number)?\s*[:]?\s*([0-9A-Za-z\-]+)", query_lower)
+                    if imei_match:
+                        q = imei_match.group(1)
+                    elif serial_match:
+                        q = serial_match.group(1)
+                    else:
+                        after = _re3.split(
+                            r"(?:show|give me|fetch|get)\s+(?:me\s+)?(?:the\s+)?"
+                            r"(?:full\s+)?device\s+(?:info|details|information)\s+(?:on|for|about)\s+"
+                            r"|(?:locate|track|find|lookup)\s+(?:the\s+)?(?:device\s+)?"
+                            r"|where's\s+(?:the\s+)?|where is\s+(?:the\s+)?",
+                            query,
+                        )
+                        if len(after) > 1:
+                            q = after[-1].strip().strip("?.!").strip()
+                    params["query"] = q or query.strip()
+                a = {"tool": tool_name, "params": params}
+                if a not in actions:
+                    actions.append(a)
 
         if not actions:
             if any(w in query_lower for w in ["status", "overview", "dashboard", "summary", "statistics", "stats", "system state"]):
@@ -760,6 +836,7 @@ class NovaBrain:
             "bandwidth_test": lambda o: f"{o.get('bandwidth_mbps', 0)} Mbps to {o.get('host', '')}",
             "payload_gen": lambda o: f"Generated {o.get('count', 0)} {o.get('category', '')} payloads",
             "packet_capture": lambda o: format_packet_capture(o, 0),
+            "device_lookup": lambda o: format_device_lookup(o, 0),
         }
 
         formatter = formatters.get(tool_name)

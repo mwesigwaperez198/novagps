@@ -64,6 +64,79 @@ class DeviceEnumerator(Tool):
             return ToolResult(success=False, output=None, error=str(e))
 
 
+class DeviceLookup(Tool):
+    name = "device_lookup"
+    description = (
+        "Resolve a registered device by IMEI, serial number, identifier, or name and "
+        "return its identity, status, IPs, and latest GPS position."
+    )
+    category = "backend"
+
+    def execute(self, query: str = "", **kwargs) -> ToolResult:
+        import httpx
+        cfg = get_config()
+        if not query:
+            return ToolResult(success=False, output=None, error="No IMEI/serial/identifier given")
+        try:
+            resp = httpx.get(
+                f"{cfg.backend_url}/search",
+                params={"q": query.strip()},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                devices = resp.json()
+                matches = devices if isinstance(devices, list) else []
+                if not matches:
+                    return ToolResult(
+                        success=True,
+                        output={
+                            "query": query.strip(),
+                            "device_count": 0,
+                            "devices": [],
+                            "message": f"No device matches '{query.strip()}'. Provide the IMEI, serial, identifier, or name.",
+                        },
+                    )
+                briefs = [device_brief(d) for d in matches]
+                return ToolResult(
+                    success=True,
+                    output={
+                        "query": query.strip(),
+                        "device_count": len(matches),
+                        "devices": briefs,
+                    },
+                )
+            else:
+                return ToolResult(success=True, output={"status_code": resp.status_code, "body": resp.text[:400]})
+        except Exception as e:
+            return ToolResult(success=False, output=None, error=str(e))
+
+
+def device_brief(d: dict) -> dict:
+    loc = d.get("latest_location") or {}
+    return {
+        "id": d.get("id", ""),
+        "name": d.get("name", ""),
+        "identifier": d.get("identifier", ""),
+        "imei": d.get("imei"),
+        "serial": d.get("serial"),
+        "model": d.get("model"),
+        "manufacturer": d.get("manufacturer"),
+        "os_type": d.get("os_type"),
+        "os_version": d.get("os_version"),
+        "device_type": d.get("device_type"),
+        "ip_address": d.get("ip_address"),
+        "local_ip": d.get("local_ip"),
+        "carrier": d.get("carrier"),
+        "active": d.get("is_active", False),
+        "lost_mode": d.get("is_lost_mode", False),
+        "last_lat": loc.get("latitude"),
+        "last_lon": loc.get("longitude"),
+        "last_speed": loc.get("speed"),
+        "last_place": loc.get("place_name"),
+        "last_seen": loc.get("recorded_at"),
+    }
+
+
 class AlertChecker(Tool):
     name = "alert_check"
     description = "Check recent alerts from the NovaGPS system."
@@ -200,5 +273,5 @@ class EndpointTester(Tool):
 
 
 def register_backend_tools(registry: ToolRegistry):
-    for tool_cls in [BackendHealthCheck, DeviceEnumerator, AlertChecker, MetricsCollector, EndpointTester]:
+    for tool_cls in [BackendHealthCheck, DeviceEnumerator, DeviceLookup, AlertChecker, MetricsCollector, EndpointTester]:
         registry.register(tool_cls())

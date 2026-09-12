@@ -6,6 +6,9 @@
 #   DEV_OWNER_EMAIL   -> your email; the ONLY account allowed to log in (dev allowlist).
 #                        Set ENVIRONMENT=development to keep the allowlist behaviour,
 #                        or production to also enable per-IP rate limiting.
+#   OWNER_PASSWORD    -> the real password for the owner account. In production the
+#                        login FAILS CLOSED until this is set, and the password is
+#                        required even after the email allowlist matches.
 
 services:
   - type: web
@@ -42,6 +45,8 @@ services:
       - key: SECRET_KEY
         sync: false
       - key: DEV_OWNER_EMAIL
+        sync: false
+      - key: OWNER_PASSWORD
         sync: false
       # Internal self-referencing keep-alive loop: the app pings its own public
       # health URL every KEEPALIVE_INTERVAL seconds (default 240) from a background
