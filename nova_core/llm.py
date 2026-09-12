@@ -51,11 +51,18 @@ class NovaLLM:
             self._checked_at = time.time()
 
             if not any(self.model in m for m in models):
-                available = ", ".join(models) if models else "none"
-                logger.warning(
-                    "Requested model '%s' not in Ollama. Available: %s",
-                    self.model, available,
-                )
+                chosen = self._pick_best_model(models)
+                if chosen:
+                    logger.info(
+                        "Configured model '%s' not installed — auto-selected '%s'",
+                        self.model, chosen,
+                    )
+                    self.model = chosen
+                else:
+                    logger.warning(
+                        "Requested model '%s' not in Ollama. Available: %s",
+                        self.model, ", ".join(models) if models else "none",
+                    )
 
             return {
                 "available": True,
@@ -69,6 +76,21 @@ class NovaLLM:
             self._checked_at = time.time()
             logger.info("Ollama not reachable at %s: %s", self.host, e)
             return {"available": False, "host": self.host, "error": str(e)}
+
+    def _pick_best_model(self, installed: list) -> str:
+        """Choose the most capable installed model when the configured one is
+        missing — prefers larger, newer models, else first installed."""
+        if not installed:
+            return ""
+        preference = [
+            "llama3.1:8b", "llama3:8b", "llama3", "llama3.2", "qwen2.5:7b",
+            "qwen3:8b", "mistral", "gemma3", "phi4", "deepseek-r1",
+        ]
+        for pref in preference:
+            for m in installed:
+                if pref in m:
+                    return m
+        return installed[0]
 
     def is_available(self) -> bool:
         return self.check_availability().get("available", False)
