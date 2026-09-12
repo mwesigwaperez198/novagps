@@ -7,14 +7,32 @@ add all NOVA-CORE agent endpoints.
 import re
 import time
 import sys
+import json
+from uuid import uuid4
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
+try:  # backend/main.py supplies this in every operational runtime
+    from auth import Principal, require_roles
+except ModuleNotFoundError:  # permits isolated NOVA-CORE parser/unit tests
+    Principal = object
+
+    def require_roles(*_roles):
+        def test_only_dependency():
+            return None
+        return test_only_dependency
 
 
-nova_router = APIRouter(prefix="/nova-core", tags=["nova-core"])
+# LAU exposes system topology, memory, scans and action planning.  It must
+# never become an anonymous control plane merely because it is mounted later
+# than the main application router.
+nova_router = APIRouter(
+    prefix="/nova-core",
+    tags=["nova-core"],
+    dependencies=[Depends(require_roles("viewer", "auditor", "operator", "admin"))],
+)
 
 
 class NovaQueryRequest(BaseModel):
@@ -32,6 +50,30 @@ class NovaShieldEmitRequest(BaseModel):
 class NovaAgentCommandRequest(BaseModel):
     command: str
     device_id: str = ""
+
+
+class NovaActionOutcomeRequest(BaseModel):
+    method: str
+    endpoint: str
+    success: bool
+    detail: str = ""
+
+
+class NovaGoalRequest(BaseModel):
+    title: str
+    description: str = ""
+    priority: str = "normal"
+    success_criteria: str = ""
+
+
+class NovaChangeProposalRequest(BaseModel):
+    file_path: str
+    content: str
+    rationale: str = ""
+
+
+class NovaChangeApprovalRequest(BaseModel):
+    confirmation: str
 
 
 class NovaQueryResponse(BaseModel):
@@ -123,6 +165,13 @@ async def nova_status():
     }
 
 
+@nova_router.get("/context/system")
+async def nova_system_context():
+    """Return LAU's bounded, live map of NOVA and her authority contract."""
+    from nova_core.system_context import SystemContext
+    return SystemContext().overview()
+
+
 @nova_router.post("/query")
 async def nova_query(req: NovaQueryRequest):
     brain = _get_brain()
@@ -147,8 +196,17 @@ async def nova_tools():
     return {"tools": tools, "count": len(tools)}
 
 
+@nova_router.get("/tools/readiness")
+async def nova_tool_readiness():
+    brain = _get_brain()
+    return {"tools": brain.tools.readiness(), "checked_at": time.time()}
+
+
 @nova_router.post("/scan")
-async def nova_scan(scan_type: str = Query(default="all")):
+async def nova_scan(
+    scan_type: str = Query(default="all"),
+    _: Principal = Depends(require_roles("operator", "admin")),
+):
     brain = _get_brain()
 
     scan_map = {
@@ -217,6 +275,109 @@ async def nova_record_lesson(
     return {"id": lesson_id, "status": "recorded"}
 
 
+@nova_router.post("/actions/outcome")
+async def nova_action_outcome(
+    req: NovaActionOutcomeRequest,
+    _: Principal = Depends(require_roles("operator", "admin")),
+):
+    """Close LAU's plan → approval → execution → learning loop."""
+    brain = _get_brain()
+    lesson_id = brain.memory.record_lesson(
+        "action_outcome",
+        f"{req.method.upper()} {req.endpoint[:180]}",
+        "Operator-approved LAU action completed" if req.success else "Operator-approved LAU action failed",
+        req.detail[:500],
+        severity="info" if req.success else "warning",
+        tags="queen,execution",
+        engine_used="LAU_EXECUTIVE_LOOP",
+    )
+    return {"status": "learned", "lesson_id": lesson_id}
+
+
+@nova_router.post("/goals")
+async def nova_create_goal(
+    req: NovaGoalRequest,
+    _: Principal = Depends(require_roles("operator", "admin")),
+):
+    if req.priority not in {"low", "normal", "high", "critical"}:
+        raise HTTPException(status_code=400, detail="Invalid priority")
+    brain = _get_brain()
+    goal = brain.memory.create_goal(uuid4().hex, req.title[:160], req.description[:1000], req.priority, req.success_criteria[:1000])
+    return {"goal": goal}
+
+
+@nova_router.get("/goals")
+async def nova_list_goals(status: Optional[str] = Query(default=None)):
+    brain = _get_brain()
+    return {"goals": brain.memory.list_goals(status)}
+
+
+@nova_router.post("/goals/{goal_id}/complete")
+async def nova_complete_goal(
+    goal_id: str,
+    _: Principal = Depends(require_roles("operator", "admin")),
+):
+    brain = _get_brain()
+    goal = brain.memory.update_goal(goal_id, "complete")
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    return {"goal": goal}
+
+
+def _safe_change_path(raw_path: str) -> Path:
+    from nova_core.config import get_config
+    root = get_config().project_root.resolve()
+    candidate = (root / raw_path).resolve() if not Path(raw_path).is_absolute() else Path(raw_path).resolve()
+    if root not in candidate.parents or candidate == root:
+        raise HTTPException(status_code=400, detail="Change path must stay inside NOVA_PROJECT_ROOT")
+    if candidate.name in {"AGENTS.md", ".env", ".env.local"} or candidate.suffix not in {".py", ".js", ".jsx", ".ts", ".tsx", ".css", ".md", ".yaml", ".yml"}:
+        raise HTTPException(status_code=400, detail="This file is not eligible for LAU change control")
+    return candidate
+
+
+@nova_router.post("/changes/propose")
+async def nova_propose_change(
+    req: NovaChangeProposalRequest,
+    _: Principal = Depends(require_roles("operator", "admin")),
+):
+    """Store a reviewed proposal; proposing code never edits a file."""
+    if len(req.content) > 500_000:
+        raise HTTPException(status_code=413, detail="Proposal is too large")
+    brain = _get_brain()
+    path = _safe_change_path(req.file_path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Target file not found")
+    proposal_id = uuid4().hex
+    proposal = {"id": proposal_id, "file_path": str(path), "content": req.content, "rationale": req.rationale[:1000], "status": "proposed", "created_at": time.time()}
+    brain.memory.set_state(f"change_proposal:{proposal_id}", json.dumps(proposal))
+    brain.memory.record_lesson("change_proposal", f"Proposed change for {path.name}", "Awaiting explicit administrator approval", req.rationale[:500], tags="change-control,queen")
+    return {"proposal_id": proposal_id, "file_path": str(path), "status": "proposed"}
+
+
+@nova_router.post("/changes/{proposal_id}/approve")
+async def nova_approve_change(
+    proposal_id: str,
+    req: NovaChangeApprovalRequest,
+    _: Principal = Depends(require_roles("admin")),
+):
+    """Apply exactly one previously reviewed proposal after typed approval."""
+    if req.confirmation != "APPLY":
+        raise HTTPException(status_code=400, detail="Type APPLY to approve a code change")
+    brain = _get_brain()
+    raw = brain.memory.get_state(f"change_proposal:{proposal_id}")
+    if not raw:
+        raise HTTPException(status_code=404, detail="Proposal not found")
+    proposal = json.loads(raw)
+    if proposal.get("status") != "proposed":
+        raise HTTPException(status_code=409, detail="Proposal is no longer pending")
+    path = _safe_change_path(proposal["file_path"])
+    result = brain.enforcer.patch_file(str(path), proposal["content"])
+    proposal["status"] = "applied" if result.get("success") else "failed"
+    proposal["result"] = result
+    brain.memory.set_state(f"change_proposal:{proposal_id}", json.dumps(proposal, default=str))
+    return {"proposal_id": proposal_id, "status": proposal["status"], "result": result}
+
+
 @nova_router.get("/alerts")
 async def nova_alerts(
     limit: int = Query(default=20),
@@ -272,8 +433,73 @@ async def nova_engine_status():
     return brain.engine.status()
 
 
+@nova_router.get("/engine/report")
+async def nova_engine_report():
+    """LAU self-diagnostic report — call this to ask LAU why the engine is in
+    its current state. Pulls engine status, recent lessons, init error, and
+    environment context into one structured response."""
+    import os, platform
+    from nova_core.engine import get_engine
+    from nova_core.config import get_config
+
+    engine = get_engine()
+    cfg = get_config()
+    status = engine.status()
+
+    # Pull the last 10 engine-category lessons from memory so LAU can narrate
+    # exactly what she observed during init (download attempts, probe results,
+    # fallback decisions, OOM events, etc.)
+    lessons = []
+    try:
+        brain = _get_brain()
+        lessons = brain.memory.get_recent_lessons(limit=10, category="engine")
+    except Exception:
+        pass
+
+    # Summarise what LAU knows about why she is in this state
+    state = status.get("state", "unknown")
+    engine_used = status.get("engine_used", "unknown")
+    init_error = status.get("init_error")
+
+    if state == "ready":
+        narrative = f"Embedded LLM is online. Model: {status.get('model')}. No issues."
+    elif state == "shield_only" and not cfg.embedded_enabled:
+        narrative = "NOVA_EMBEDDED is set to 0 — llama was intentionally disabled. LAU is running on the deterministic shield by configuration."
+    elif state == "shield_only" and init_error:
+        narrative = f"Engine fell back to deterministic shield. Last recorded failure: {init_error}"
+    elif state in ("downloading", "loading"):
+        narrative = f"Engine is currently in state '{state}'. Init is still in progress."
+    elif state == "idle":
+        narrative = "Engine has not started yet. start_async() has not been called or boot delay has not elapsed."
+    else:
+        narrative = f"Engine state is '{state}'. No specific failure recorded."
+
+    return {
+        "agent": cfg.agent_name,
+        "narrative": narrative,
+        "engine_state": state,
+        "engine_used": engine_used,
+        "embedded_enabled": cfg.embedded_enabled,
+        "llm_backend": cfg.llm_backend,
+        "init_error": init_error,
+        "model": status.get("model"),
+        "available_ram_mb": status.get("available_ram_mb"),
+        "environment": {
+            "python": platform.python_version(),
+            "platform": platform.system(),
+            "nova_embedded": os.environ.get("NOVA_EMBEDDED", "not set"),
+            "nova_llm_backend": os.environ.get("NOVA_LLM_BACKEND", "not set"),
+            "nova_mem_reserve_mb": os.environ.get("NOVA_MEM_RESERVE_MB", "not set"),
+        },
+        "recent_engine_lessons": lessons,
+    }
+
+
 @nova_router.post("/engine/init")
-async def nova_engine_init(force: bool = Query(default=False)):
+async def nova_engine_init(
+    force: bool = Query(default=False),
+    _: Principal = Depends(require_roles("operator", "admin")),
+):
     brain = _get_brain()
     brain.engine.initialize(force=force)
     return brain.engine.status()
@@ -473,6 +699,9 @@ _INTENT_MAP = [
     ("shield_validate", ["shield validate", "run validator", "all lanes", "test shield",
                           "module validator", "run shield", "validate shield", "validators"]),
     ("lau_status", ["lau status", "agent status", "nova status", "engine status"]),
+    ("engine_report", ["engine report", "why did you fail", "what failed", "failure reason",
+                        "why are you on shield", "what went wrong", "report failure",
+                        "diagnose engine", "engine diagnostic", "why shield", "lau report"]),
     ("full_scan", ["full scan", "complete scan", "scan everything", "run all scan"]),
     ("bandwidth", ["bandwidth", "speed test", "bandwidth test"]),
     ("mtu_test", ["mtu test", "mtu", "max transmission"]),
@@ -559,6 +788,22 @@ def _greeting_response(brain, command: str) -> dict:
     }
 
 
+def _action(method: str, endpoint: str, *, risk: str = "standard", extract_body: bool = False) -> dict:
+    """Describe a proposed operation for either LAU UI.
+
+    Plans never execute on the server as a side effect of interpretation.  Both
+    UIs use this contract to ask the operator before a state-changing action.
+    """
+    return {
+        "method": method,
+        "endpoint": endpoint,
+        "risk": risk,
+        "requires_confirmation": method != "GET",
+        "requires_typed_confirmation": risk == "destructive",
+        "extract_body": extract_body,
+    }
+
+
 async def run_dispatch(command: str, device_id: str = "") -> dict:
     """Shared LAU dispatch chain used by the HTTP endpoint and the terminal chat.
 
@@ -640,7 +885,7 @@ async def run_dispatch(command: str, device_id: str = "") -> dict:
             "thought_process": thought,
             "intent": intent["category"],
             "response": f"Locating device {device_id}. LAU is triggering a locate command.",
-            "action": {"method": "POST", "endpoint": f"/device/{device_id}/trigger-locate"},
+            "action": _action("POST", f"/device/{device_id}/trigger-locate"),
         }
 
     if intent["category"] == "device_lock":
@@ -654,7 +899,7 @@ async def run_dispatch(command: str, device_id: str = "") -> dict:
             "thought_process": thought + [f"Locking device {device_id}"],
             "intent": intent["category"],
             "response": f"Initiating remote lock on device {device_id}.",
-            "action": {"method": "POST", "endpoint": f"/device/{device_id}/remote-lock?message=Locked by LAU agent"},
+            "action": _action("POST", f"/device/{device_id}/remote-lock?message=Locked by LAU agent", risk="high"),
         }
 
     if intent["category"] == "device_wipe":
@@ -668,7 +913,7 @@ async def run_dispatch(command: str, device_id: str = "") -> dict:
             "thought_process": thought + [f"Wiping device {device_id}"],
             "intent": intent["category"],
             "response": f"LAU is initiating remote wipe on device {device_id}. This is destructive.",
-            "action": {"method": "POST", "endpoint": f"/device/{device_id}/remote-wipe"},
+            "action": _action("POST", f"/device/{device_id}/remote-wipe", risk="destructive"),
         }
 
     if intent["category"] == "device_message":
@@ -682,9 +927,7 @@ async def run_dispatch(command: str, device_id: str = "") -> dict:
             "thought_process": thought + [f"Ready to send message to {device_id}"],
             "intent": intent["category"],
             "response": f"Ready to send a message to {device_id}.",
-            "action": {"method": "POST",
-                        "endpoint": f"/device/{device_id}/send-message",
-                        "extract_body": True},
+            "action": _action("POST", f"/device/{device_id}/send-message", extract_body=True),
         }
 
     if intent["category"] == "device_fingerprint":
@@ -698,7 +941,7 @@ async def run_dispatch(command: str, device_id: str = "") -> dict:
             "thought_process": thought + [f"Fingerprinting device {device_id}"],
             "intent": intent["category"],
             "response": f"Running fingerprint analysis on device {device_id}.",
-            "action": {"method": "GET", "endpoint": f"/device/{device_id}/fingerprint"},
+            "action": _action("GET", f"/device/{device_id}/fingerprint"),
         }
 
     if intent["category"] == "camera_discover":
@@ -706,7 +949,7 @@ async def run_dispatch(command: str, device_id: str = "") -> dict:
             "thought_process": thought + ["Scanning network for IP cameras"],
             "intent": intent["category"],
             "response": "Scanning the local network for IP cameras and RTSP streams...",
-            "action": {"method": "GET", "endpoint": "/camera/discover?subnet=192.168.1.0/24"},
+            "action": _action("GET", "/camera/discover?subnet=192.168.1.0/24"),
         }
 
     if intent["category"] == "vehicle_track":
@@ -720,7 +963,16 @@ async def run_dispatch(command: str, device_id: str = "") -> dict:
             "thought_process": thought + [f"Reporting vehicle {device_id} as stolen, initiating recovery"],
             "intent": intent["category"],
             "response": f"LAU is reporting vehicle {device_id} as stolen and activating recovery tracking.",
-            "action": {"method": "POST", "endpoint": f"/vehicle/stolen-report?device_id={device_id}"},
+            "action": _action("POST", f"/vehicle/stolen-report?device_id={device_id}", risk="high"),
+        }
+
+    if intent["category"] == "engine_report":
+        thought.append("Pulling self-diagnostic engine report")
+        return {
+            "thought_process": thought,
+            "intent": intent["category"],
+            "response": "Pulling LAU engine diagnostic report...",
+            "action": _action("GET", "/nova-core/engine/report"),
         }
 
     if intent["category"] == "lau_status":
@@ -750,7 +1002,7 @@ async def run_dispatch(command: str, device_id: str = "") -> dict:
             ],
             "intent": intent["category"],
             "response": "Running all definitive LAU module validators (compile + execute each emitted source)...",
-            "action": {"method": "POST", "endpoint": "/nova-core/shield/validate"},
+            "action": _action("POST", "/nova-core/shield/validate"),
         }
 
     try:
