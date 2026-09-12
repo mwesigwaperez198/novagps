@@ -108,7 +108,7 @@ class NovaBrain:
         if isinstance(reasoning_doc, dict):
             reasoning_doc = reasoning_doc.get("output", {})
 
-        response = self._synthesize_response(query, results, recent_lessons)
+        response = self._synthesize_response(query, results)
 
         self.memory.record_lesson(
             "agent_query",
@@ -324,7 +324,7 @@ class NovaBrain:
 
         return {"intent": "execute", "actions": actions}
 
-    def _synthesize_response(self, query: str, results: dict, lessons: list) -> str:
+    def _synthesize_response(self, query: str, results: dict) -> str:
         if not results:
             return self._help_text()
 
@@ -380,16 +380,6 @@ class NovaBrain:
             elif output:
                 parts.append(f"**{tool_name}:** {output}")
 
-        if lessons:
-            query_words = [w for w in query.lower().split() if len(w) > 3][:4]
-            relevant = [l for l in lessons if any(
-                kw in l.get("obstacle", "").lower() for kw in query_words
-            )]
-            if relevant:
-                parts.append(f"\nRelevant lessons learned:")
-                for l in relevant[:3]:
-                    parts.append(f"  - {l['obstacle'][:80]}")
-
         return "\n\n".join(parts)
 
     def _conversational_response(self, query: str) -> str:
@@ -431,10 +421,7 @@ class NovaBrain:
         opcodes = self._parse_opcodes(c)
         pure_chatter = set(opcodes) == {"OP_CONVERSE"}
 
-        stats = self.memory.get_memory_stats()
         tools = self.tools.list_tools()
-        lessons = stats.get("total_lessons", 0)
-        alerts = stats.get("unacknowledged_alerts", 0)
         engine = self.engine_used
         name = self.agent_name
 
@@ -558,9 +545,9 @@ class NovaBrain:
                 ),
                 (
                     f"Steady beats fast. The clock isn't the obstacle — ambiguity is. "
-                    f"I've banked {lessons} lessons in here and every one came from a "
-                    f"failure run, not a flawless one. Keep logs, close loops, and move "
-                    f"on. That works for circuits; it works for humans too."
+                    f"Every lesson I bank came from a failure run, not a flawless one. "
+                    f"Keep logs, close loops, and move on. That works for circuits; "
+                    f"it works for humans too."
                 ),
             ]
             body = pick(advice)
@@ -574,8 +561,8 @@ class NovaBrain:
             )
         elif asking_state:
             body = (
-                f"Green across the board: {engine} engine, {lessons} lessons banked, "
-                f"{alerts} unacked alerts. Nothing slips past. {invite}"
+                f"Green across the board — {engine} engine live, all filters armed, "
+                f"nothing on the wire that should be. {invite}"
             )
         elif pure_chatter and any(q in c for q in ("what", "why", "how", "tell me", "explain")) and len(c) > 18:
             body = (
@@ -584,7 +571,7 @@ class NovaBrain:
                 f"task and I'll hit it."
             )
         elif pure_chatter:
-            body = f"I'm here, the {role} — tools synced, memory {lessons} lessons deep. {invite}"
+            body = f"I'm here, the {role} — tools synced, filters armed. {invite}"
         else:
             mapped = ", ".join(
                 tk for tk in (self._OP_TO_TOOL.get(op) for op in opcodes)

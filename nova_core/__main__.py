@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 
 from .brain import NovaBrain
@@ -376,6 +377,35 @@ def _render_thought(thought_process, indent: int = 2) -> None:
         print(f"{pad}{_tui(f'{i:>2}.', 'cyan')} {_wrap(str(step), indent + 5)}")
 
 
+_DEBUG_MONOLOGUE = "/tmp/lau_internal_monologue.log"
+
+
+def _log_internal_monologue(intent: str, thought_process, engine: str, command: str) -> None:
+    """Hide the reasoning exchange behind a local debug channel.
+
+    Nothing is written unless NOVA_DEBUG_REASONING=1. The terminal stays clean;
+    the monologue sleeps in /tmp/lau_internal_monologue.log for the developer only.
+    """
+    if os.environ.get("NOVA_DEBUG_REASONING") != "1":
+        return
+    steps = thought_process if isinstance(thought_process, list) else []
+    payload = {
+        "timestamp": time.time(),
+        "input": command,
+        "intent": intent,
+        "engine": engine,
+        "telemetric_baseline": "Analyzing input layout for dynamic contextual assembly.",
+        "constraint_isolation": "Enforcing data privacy gates — reasoning stays in the log, not the terminal.",
+        "adaptation_vector": f"Routing {intent} through the shared dispatch chain.",
+        "execution_steps": steps,
+    }
+    try:
+        with open(_DEBUG_MONOLOGUE, "a") as f:
+            f.write(json.dumps(payload) + "\n")
+    except Exception:
+        pass
+
+
 async def cmd_chat():
     """Personal LAU terminal — the same dispatch chain as the web HUD."""
 
@@ -535,26 +565,35 @@ async def cmd_chat():
             continue
 
         steps = out.get("thought_process") or []
-        if steps:
-            print(_tui("  ◈ thinking…", "cyan", "bold"))
-            _render_thought(steps)
+        show_thoughts = os.environ.get("NOVA_SHOW_THOUGHTS") == "1"
+        _log_internal_monologue(
+            out.get("intent", ""),
+            steps,
+            out.get("engine", out.get("engine_used", "")),
+            raw,
+        )
 
         print(_tui(f"  LAU ▸ {_wrap(out.get('response', ''), 2)}", "green", "bold"))
-        meta = [out.get("intent", ""), out.get("engine", out.get("engine_used", ""))]
-        if out.get("latency_ms"):
-            meta.append(f"{float(out['latency_ms']):.0f}ms")
-        if device_id:
-            meta.append(f"device={device_id}")
-        if meta:
-            print(_tui(f"  {' | '.join(m for m in meta if m)}", "grey"))
 
-        tools = out.get("tools_executed") or []
-        if tools:
-            print(_tui(f"  → ran: {', '.join(tools)}", "cyan", "dim"))
-        for tool_name, result in (out.get("results") or {}).items():
-            if tool_name == "_reasoning":
-                continue
-            print(_tool_brief(result, tool_name))
+        if show_thoughts:
+            if steps:
+                print(_tui("  ◈ thinking…", "cyan", "bold"))
+                _render_thought(steps)
+            meta = [out.get("intent", ""), out.get("engine", out.get("engine_used", ""))]
+            if out.get("latency_ms"):
+                meta.append(f"{float(out['latency_ms']):.0f}ms")
+            if device_id:
+                meta.append(f"device={device_id}")
+            if meta:
+                print(_tui(f"  {' | '.join(m for m in meta if m)}", "grey"))
+
+            tools = out.get("tools_executed") or []
+            if tools:
+                print(_tui(f"  → ran: {', '.join(tools)}", "cyan", "dim"))
+            for tool_name, result in (out.get("results") or {}).items():
+                if tool_name == "_reasoning":
+                    continue
+                print(_tool_brief(result, tool_name))
 
         action = out.get("action")
         if action:
