@@ -17,12 +17,12 @@ class APIFuzzer(Tool):
         import httpx
 
         endpoints = [
-            ("POST", "/api/v1/auth/login", {"email": "__FUZZ__", "password": "__FUZZ__"}),
-            ("GET", "/api/v1/devices", None),
-            ("POST", "/api/v1/location/update", {"identifier": "__FUZZ__", "lat": "__FUZZ__", "lon": "__FUZZ__"}),
-            ("POST", "/api/v1/consent", {"identifier": "__FUZZ__", "scope": "__FUZZ__", "granted": True}),
-            ("GET", "/api/v1/geofences", None),
-            ("POST", "/api/v1/terminal/execute", {"command": "__FUZZ__"}),
+            ("POST", "/auth/login", {"email": "__FUZZ__", "password": "__FUZZ__"}),
+            ("GET", "/devices", None),
+            ("POST", "/update-location", {"identifier": "__FUZZ__", "lat": "__FUZZ__", "lon": "__FUZZ__"}),
+            ("POST", "/consent", {"identifier": "__FUZZ__", "scope": "__FUZZ__", "granted": True}),
+            ("GET", "/geofences", None),
+            ("POST", "/tool/run", {"command_id": "__FUZZ__", "target": "__FUZZ__"}),
         ]
 
         results = []
@@ -134,9 +134,9 @@ class InjectionTester(Tool):
 
         findings = []
         endpoints = [
-            ("POST", "/api/v1/auth/login", {"email": "__PAYLOAD__", "password": "test"}),
-            ("GET", "/api/v1/devices?search=__PAYLOAD__", None),
-            ("POST", "/api/v1/terminal/execute", {"command": "__PAYLOAD__"}),
+            ("POST", "/auth/login", {"email": "__PAYLOAD__", "password": "test"}),
+            ("GET", "/search?q=__PAYLOAD__", None),
+            ("POST", "/tool/run?command_id=__PAYLOAD__&target=__PAYLOAD__", {}),
         ]
 
         for attack_type, attack_payloads in payloads.items():

@@ -43,6 +43,13 @@ services:
         sync: false
       - key: DEV_OWNER_EMAIL
         sync: false
+      # Internal self-referencing keep-alive loop: the app pings its own public
+      # health URL every KEEPALIVE_INTERVAL seconds (default 240) from a background
+      # task, so Render never counts the service as idle / spins it down.
+      - key: KEEPALIVE_URL
+        value: https://novagps.onrender.com
+      - key: KEEPALIVE_INTERVAL
+        value: "240"
     disk:
       name: nova-gps-data
       mountPath: /var/data

@@ -53,7 +53,7 @@ For every task, reason step-by-step:
 - Android Agent: Kotlin, background GPS tracking every 30s
 - Protocol: MQTT, HTTP, WebSocket, Traccar-compatible
 - Deploy: Docker container on Render with persistent disk at /var/data
-- Key endpoints: /health, /metrics, /api/v1/*, /traccar, /consent
+- Key endpoints: /health, /metrics, /auth/login, /devices, /update-location, /consent, /geofences, /traccar
 - Auth: JWT (HS256), role-based (viewer, operator, admin, auditor, superadmin)
 
 ### 8. Response Format

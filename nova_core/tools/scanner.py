@@ -12,7 +12,7 @@ from ..tools import Tool, ToolResult, ToolRegistry
 
 
 def _api(base_url: str) -> str:
-    return f"{base_url}/api/v1"
+    return base_url
 
 
 class PortScanner(Tool):
@@ -139,7 +139,7 @@ class VulnerabilityScanner(Tool):
         import httpx
         findings = []
         try:
-            resp = httpx.get(f"{url}/api/v1/nonexistent-endpoint-test", timeout=10)
+            resp = httpx.get(f"{url}/__nova_nonexistent__", timeout=10)
             body = resp.text.lower()
             leak_patterns = ["traceback", "stack trace", "traceback (most recent", "file \"/app/", "internal server error"]
             for pattern in leak_patterns:
@@ -262,11 +262,11 @@ class AuthScanner(Tool):
             pass
 
         try:
-            resp = httpx.get(f"{_api(base_url)}/auth/me", timeout=10)
+            resp = httpx.get(f"{_api(base_url)}/devices", timeout=10)
             if resp.status_code != 401:
                 findings.append({
                     "check": "unauthenticated_me",
-                    "detail": f"/auth/me returned {resp.status_code} without token",
+                    "detail": f"/devices returned {resp.status_code} without token",
                     "severity": "high",
                 })
         except Exception:

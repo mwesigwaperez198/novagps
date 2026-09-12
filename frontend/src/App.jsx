@@ -409,7 +409,7 @@ export default function App() {
         <div className="nova-footer-shortcut">SHIFT + CTRL + / FOR HUD OVERRIDE</div>
       </footer>
 
-      <LAUHud isOpen={lauOpen} onClose={() => setLauOpen(false)} />
+      <LAUHud isOpen={lauOpen} onClose={() => setLauOpen(false)} deviceId={selectedDevice?.id || ""} />
     </main>
   );
 }

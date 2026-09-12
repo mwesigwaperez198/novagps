@@ -16,7 +16,7 @@ const QUICK_ACTIONS = [
   { id: "traceroute", label: "Traceroute", cmd: "traceroute to 8.8.8.8" },
 ];
 
-export default function LAUHud({ isOpen, onClose }) {
+export default function LAUHud({ isOpen, onClose, deviceId = "" }) {
   const [logs, setLogs] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -41,9 +41,17 @@ export default function LAUHud({ isOpen, onClose }) {
     if (!action?.endpoint) return;
     setLoading(true);
     try {
+      const opts = { method: action.method };
+      let endpoint = action.endpoint;
+      if (action.extract_body) {
+        const lastUser = [...logs].reverse().find((l) => l.role === "user");
+        const text = (lastUser?.text || "").trim();
+        if (!/[?&]message=/.test(endpoint)) {
+          endpoint += (endpoint.includes("?") ? "&" : "?") + `message=${encodeURIComponent(text)}`;
+        }
+      }
       const isGet = action.method === "GET";
-      const opts = isGet ? {} : { method: action.method };
-      const data = await request(action.endpoint, opts);
+      const data = await request(endpoint, isGet ? {} : opts);
       setLogs((prev) => [...prev, {
         id: Date.now(),
         timestamp: new Date().toLocaleTimeString("en-GB", { hour12: false }),
@@ -72,7 +80,7 @@ export default function LAUHud({ isOpen, onClose }) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [logs]);
 
   async function dispatch(command) {
     if (!command.trim() || loading) return;
@@ -81,7 +89,7 @@ export default function LAUHud({ isOpen, onClose }) {
     setLoading(true);
     setLogs((prev) => [...prev, { id: `u-${Date.now()}`, timestamp: ts, role: "user", text: command }]);
     try {
-      const result = await api.novaAgentDispatch(command);
+      const result = await api.novaAgentDispatch(command, deviceId);
       const thoughts = (result.thought_process || []).map((t, i) => `${i === 0 ? "\u251c\u2500" : i === result.thought_process.length - 1 ? "\u2514\u2500" : "\u251c\u2500"} ${t}`).join("\n");
       setLogs((prev) => [...prev, {
         id: Date.now(),

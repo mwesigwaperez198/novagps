@@ -2,6 +2,7 @@
 
 import ast
 import hashlib
+import json
 import os
 import re
 from pathlib import Path
@@ -56,25 +57,27 @@ class SecretLeakDetector(Tool):
             except Exception:
                 continue
 
-        for fpath in scan_dir.rglob("*.ts"):
-            if "node_modules" in str(fpath) or ".git" in str(fpath):
-                continue
-            try:
-                content = fpath.read_text(errors="replace")
-                scanned_files += 1
-                for pattern, label in patterns:
-                    for match in re.finditer(pattern, content, re.IGNORECASE):
-                        line_num = content[:match.start()].count("\n") + 1
-                        value_preview = match.group(1)[:8] + "..." if match.lastindex else match.group(0)[:16] + "..."
-                        findings.append({
-                            "file": str(fpath.relative_to(cfg.project_root)),
-                            "line": line_num,
-                            "type": label,
-                            "preview": value_preview,
-                            "severity": "critical",
-                        })
-            except Exception:
-                continue
+        web_exts = (".js", ".jsx", ".ts", ".tsx", ".env", ".env.example", ".env.local")
+        for ext in web_exts:
+            for fpath in cfg.project_root.rglob(f"*{ext}"):
+                if "node_modules" in str(fpath) or "dist" in str(fpath) or ".git" in str(fpath):
+                    continue
+                try:
+                    content = fpath.read_text(errors="replace")
+                    scanned_files += 1
+                    for pattern, label in patterns:
+                        for match in re.finditer(pattern, content, re.IGNORECASE):
+                            line_num = content[:match.start()].count("\n") + 1
+                            value_preview = match.group(1)[:8] + "..." if match.lastindex else match.group(0)[:16] + "..."
+                            findings.append({
+                                "file": str(fpath.relative_to(cfg.project_root)),
+                                "line": line_num,
+                                "type": label,
+                                "preview": value_preview,
+                                "severity": "critical",
+                            })
+                except Exception:
+                    continue
 
         return ToolResult(
             success=True,
@@ -181,7 +184,7 @@ class DependencyAudit(Tool):
                             "ecosystem": "javascript",
                             "package": pkg,
                             "version_spec": ver,
-                            "pinned": ver.startswith("^") or ver.startswith("~"),
+                            "pinned": bool(re.match(r"^[=]?\d+(?:\.\d+){1,2}(?:[-+][0-9A-Za-z.\-]+)?$", ver)),
                             "section": section,
                         })
             except Exception:
@@ -212,8 +215,14 @@ class DuplicateExportDetector(Tool):
 
         duplicates = []
         scanned = 0
+        javascript_exts = (".ts", ".tsx", ".js", ".jsx")
 
-        for fpath in scan_dir.rglob("*.{ts,tsx}"):
+        files = []
+        for ext in javascript_exts:
+            files.extend(scan_dir.rglob(f"*{ext}"))
+        files.sort()
+
+        for fpath in files:
             if "node_modules" in str(fpath) or "dist" in str(fpath):
                 continue
             try:

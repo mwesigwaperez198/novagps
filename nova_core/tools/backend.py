@@ -48,7 +48,7 @@ class DeviceEnumerator(Tool):
         cfg = get_config()
 
         try:
-            resp = httpx.get(f"{cfg.backend_url}/api/v1/devices", timeout=10)
+            resp = httpx.get(f"{cfg.backend_url}/devices", timeout=10)
             if resp.status_code == 200:
                 devices = resp.json()
                 return ToolResult(
@@ -75,12 +75,13 @@ class AlertChecker(Tool):
 
         try:
             resp = httpx.get(
-                f"{cfg.backend_url}/api/v1/alerts",
+                f"{cfg.backend_url}/alerts",
                 params={"limit": limit},
                 timeout=10,
             )
             if resp.status_code == 200:
-                alerts = resp.json()
+                data = resp.json()
+                alerts = data.get("alerts", []) if isinstance(data, dict) else data
                 return ToolResult(
                     success=True,
                     output={
@@ -145,13 +146,13 @@ class EndpointTester(Tool):
         endpoints = [
             ("GET", "/health", None, [200]),
             ("GET", "/metrics", None, [200]),
-            ("POST", "/api/v1/auth/login", {"email": "test", "password": "test"}, [401, 422]),
-            ("GET", "/api/v1/devices", None, [401, 200]),
-            ("GET", "/api/v1/geofences", None, [401, 200]),
-            ("GET", "/api/v1/consent", None, [401, 200]),
-            ("GET", "/api/v1/analytics/dashboard", None, [401, 200]),
-            ("GET", "/api/v1/blockchain/status", None, [200, 401]),
-            ("GET", "/api/v1/webhooks", None, [401, 200]),
+            ("POST", "/auth/login", {"email": "test", "password": "test"}, [401, 422]),
+            ("GET", "/devices", None, [401, 200]),
+            ("GET", "/geofences", None, [401, 200]),
+            ("GET", "/alerts", None, [401, 200]),
+            ("GET", "/analytics/dashboard", None, [401, 200]),
+            ("GET", "/consent/verify-chain", None, [401, 200]),
+            ("GET", "/webhooks", None, [401, 200]),
             ("POST", "/traccar", {"id": "test", "lat": 0, "lon": 0}, [200, 401]),
         ]
 

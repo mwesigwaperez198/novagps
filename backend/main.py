@@ -1,5 +1,6 @@
 import hashlib
 import logging
+import os
 import re
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -97,7 +98,39 @@ def startup_event() -> None:
     init_db()
     import asyncio
 
-    bus.attach_loop(asyncio.get_running_loop())
+    loop = asyncio.get_running_loop()
+    bus.attach_loop(loop)
+    _maybe_start_keepalive(loop)
+
+
+KEEPALIVE_INTERVAL = int(os.getenv("KEEPALIVE_INTERVAL", "240"))
+
+
+def _keepalive_url() -> str | None:
+    base = os.getenv("KEEPALIVE_URL") or os.getenv("RENDER_EXTERNAL_URL")
+    if not base:
+        return None
+    return base.rstrip("/") + "/health"
+
+
+def _maybe_start_keepalive(loop: "asyncio.AbstractEventLoop") -> None:
+    url = _keepalive_url()
+    if not url:
+        return
+    loop.create_task(_keepalive_loop(url))
+    logger.info("keepalive loop started -> %s every %ss", url, KEEPALIVE_INTERVAL)
+
+
+async def _keepalive_loop(url: str) -> None:
+    import asyncio
+
+    while True:
+        try:
+            with http_requests.get(url, timeout=10) as resp:
+                logger.info("keepalive ping status=%s", resp.status_code)
+        except Exception as exc:
+            logger.warning("keepalive ping failed: %s", exc)
+        await asyncio.sleep(KEEPALIVE_INTERVAL)
 
 
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9_.:@-]{3,160}$")
