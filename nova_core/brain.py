@@ -51,8 +51,15 @@ def format_device_lookup(o: dict, indent: int = 0) -> str:
     """Render a device lookup (IMEI/serial/identifier) result as a device card."""
     pad = " " * indent
     count = o.get("device_count", 0)
-    if count == 0:
-        return f"0 devices for '{o.get('query', '')}': {o.get('message', 'no match')}"
+    if count == 0 or not o.get("devices"):
+        head = f"0 devices for '{o.get('query', '')}': {o.get('message', 'no match')}"
+        lines = [head]
+        for reason in o.get("analysis") or []:
+            lines.append(f"  · {reason}")
+        if o.get("backend_status"):
+            lines.append(f"  backend: {o['backend_status']}"
+                          + (f" · {o['total_devices']} registered" if o.get("total_devices") is not None else ""))
+        return ("\n" + pad).join(lines)
     lines = [f"{count} device(s) for '{o.get('query', '')}'"]
     for d in o.get("devices") or []:
         ident = d.get("name") or d.get("identifier") or d.get("id", "?")
@@ -594,8 +601,12 @@ class NovaBrain:
         if tool_name == "device_lookup":
             import re as _re3
             q = ""
-            imei_match = _re3.search(r"imei\s*[:]?\s*([0-9A-Za-z\-]+)", query_lower)
-            serial_match = _re3.search(r"serial(?: number)?\s*[:]?\s*([0-9A-Za-z\-]+)", query_lower)
+            imei_match = _re3.search(
+                r"\bimei\b\s*(?:number\s*)?[:#]?\s*([0-9]{15,17})\b", query_lower)
+            serial_match = _re3.search(
+                r"\b(?:serial\s*(?:number\s*)?|sn\b)\s*[:]?\s*([0-9a-z][0-9a-z\-]{2,})",
+                query_lower,
+            )
             if imei_match:
                 q = imei_match.group(1)
             elif serial_match:

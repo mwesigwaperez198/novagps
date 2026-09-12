@@ -5,6 +5,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
+import httpx
+
 from ..tools import Tool, ToolResult, ToolRegistry
 from ..config import get_config
 
@@ -83,23 +85,66 @@ class DeviceLookup(Tool):
         if not query:
             return ToolResult(success=False, output=None, error="No IMEI/serial/identifier given")
         try:
-            resp = httpx.get(
-                f"{cfg.backend_url}/search",
-                params={"q": query.strip()},
-                headers=_auth_headers(),
-                timeout=10,
-            )
+            try:
+                resp = httpx.get(
+                    f"{cfg.backend_url}/search",
+                    params={"q": query.strip()},
+                    headers=_auth_headers(),
+                    timeout=8,
+                )
+            except httpx.RequestError as exc:
+                diag = _backend_diagnosis(cfg, query.strip())
+                return ToolResult(
+                    success=True,
+                    output={
+                        "query": query.strip(),
+                        "device_count": 0,
+                        "devices": [],
+                        "backend_status": diag["backend_status"] or "unreachable",
+                        "healthy": False,
+                        "total_devices": diag["device_count"],
+                        "analysis": (
+                            diag["analysis"]
+                            or [f"Cannot reach backend at {cfg.backend_url} ({type(exc).__name__}). "
+                                "Check the NOVA_BACKEND_URL, network, or Render cold start."]
+                        ),
+                        "message": f"Backend unreachable: {type(exc).__name__}.",
+                    },
+                )
             if resp.status_code == 200:
                 devices = resp.json()
                 matches = devices if isinstance(devices, list) else []
                 if not matches:
+                    diag = _backend_diagnosis(cfg, query.strip())
+                    if diag["healthy"]:
+                        reasons = [
+                            "No registered device matches that IMEI/serial on the backend.",
+                            "If the device phones home via the Traccar app, it is enrolled under its",
+                            "Traccar device id (the /traccar 'id' param) — NOT necessarily the IMEI.",
+                            "Provide the identifier shown on the dashboard, or search the device name.",
+                        ]
+                    else:
+                        reasons = [
+                            f"The backend answered {diag['backend_status']} — the service may be cold-",
+                            "starting (Render free tier spins down after idle) or unreachable.",
+                            "Try again in ~60s, or use a paid instance so it never sleeps.",
+                        ]
+                    if diag["device_count"] is not None:
+                        reasons.insert(
+                            0 if diag["healthy"] else 1,
+                            f"{diag['device_count']} device(s) are registered on the backend.",
+                        )
                     return ToolResult(
                         success=True,
                         output={
                             "query": query.strip(),
                             "device_count": 0,
                             "devices": [],
-                            "message": f"No device matches '{query.strip()}'. Provide the IMEI, serial, identifier, or name.",
+                            "backend_status": diag["backend_status"],
+                            "healthy": diag["healthy"],
+                            "total_devices": diag["device_count"],
+                            "analysis": (diag["analysis"] or reasons),
+                            "message": f"No device matches '{query.strip()}'.",
                         },
                     )
                 briefs = [device_brief(d) for d in matches]
@@ -113,9 +158,69 @@ class DeviceLookup(Tool):
                     result["locate"] = locate
                 return ToolResult(success=True, output=result)
             else:
-                return ToolResult(success=True, output={"status_code": resp.status_code, "body": resp.text[:400]})
+                diag = _backend_diagnosis(cfg, query.strip())
+                out = {
+                    "status_code": resp.status_code,
+                    "backend_status": diag["backend_status"],
+                    "healthy": diag["healthy"],
+                    "device_count": 0,
+                    "devices": [],
+                }
+                if diag["healthy"]:
+                    out["analysis"] = (
+                        diag["analysis"]
+                        or [
+                            "Backend is healthy but returned HTTP "
+                            f"{resp.status_code} for this search — the query may need the API token.",
+                        ]
+                    )
+                else:
+                    out["analysis"] = [
+                        f"Backend unreachable ({diag['backend_status']}); "
+                        "Render spins the free tier down after idle. Wait ~60s or use a paid instance."
+                    ]
+                out["message"] = f"Backend returned HTTP {resp.status_code}."
+                return ToolResult(success=True, output=out)
         except Exception as e:
             return ToolResult(success=False, output=None, error=str(e))
+
+
+def _backend_diagnosis(cfg, query: str) -> dict:
+    """Probe backend health + device count, return a structured analysis."""
+    result: dict = {"backend_status": "unknown", "healthy": False, "device_count": None, "analysis": []}
+    hdrs = _auth_headers()
+    # 1) health check
+    try:
+        hr = httpx.get(f"{cfg.backend_url}/health", headers=hdrs, timeout=6)
+        if hr.status_code == 200:
+            result["backend_status"] = "healthy"
+            result["healthy"] = True
+        else:
+            result["backend_status"] = f"unhealthy (HTTP {hr.status_code})"
+    except httpx.RequestError:
+        result["backend_status"] = "unreachable"
+    # 2) device count
+    try:
+        dr = httpx.get(f"{cfg.backend_url}/devices", headers=hdrs, timeout=8)
+        if dr.status_code == 200:
+            devs = dr.json() if isinstance(dr.json(), list) else []
+            result["device_count"] = len(devs)
+            # look for imei match in any device
+            if query:
+                q = query.strip()
+                for d in devs:
+                    if d.get("imei") == q:
+                        result["analysis"].append(
+                            f"Found IMEI {q} on device identifier={d.get('identifier')!r}; "
+                            "it may be registered under its Traccar device id, not by IMEI."
+                        )
+                    if d.get("serial") == q:
+                        result["analysis"].append(
+                            f"Found serial {q} on device identifier={d.get('identifier')!r}."
+                        )
+    except httpx.RequestError:
+        pass
+    return result
 
 
 def _auth_headers() -> dict:

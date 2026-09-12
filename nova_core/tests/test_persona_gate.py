@@ -184,6 +184,128 @@ class TestDeviceLookup:
         parsed = NovaBrain()._parse_request("show device info for test-phone")
         assert all(a["params"].get("trigger_locate") is False for a in parsed["actions"])
 
+    def test_parse_imei_number_phrase(self):
+        from nova_core.brain import NovaBrain
+        parsed = NovaBrain()._parse_request(
+            "track my device on IMEI number 358638090685186 , SN FCDZ70W3HG00"
+        )
+        acts = [a for a in parsed["actions"] if a["tool"] == "device_lookup"]
+        assert parsed["actions"]
+        assert acts[0]["params"]["query"] == "358638090685186"
+        assert acts[0]["params"]["trigger_locate"] is True
+
+    def test_parse_imei_only_digits(self):
+        from nova_core.brain import NovaBrain
+        parsed = NovaBrain()._parse_request("IMEI: 355985051234567 show device info")
+        acts = [a for a in parsed["actions"] if a["tool"] == "device_lookup"]
+        assert acts and acts[0]["params"]["query"] == "355985051234567"
+
+    def test_parse_serial_sn_phrase(self):
+        from nova_core.brain import NovaBrain
+        parsed = NovaBrain()._parse_request("find device serial SN FCDZ70W3HG00")
+        acts = [a for a in parsed["actions"] if a["tool"] == "device_lookup"]
+        assert acts and acts[0]["params"]["query"] == "fcdz70w3hg00"
+
+    def test_format_no_match_diagnosis(self):
+        from nova_core.brain import format_device_lookup
+        s = format_device_lookup({
+            "query": "358638090685186",
+            "device_count": 0,
+            "message": "No device matches '358638090685186'.",
+            "backend_status": "healthy",
+            "total_devices": 3,
+            "analysis": [
+                "3 device(s) are registered on the backend.",
+                "No registered device matches that IMEI/serial on the backend.",
+                "If the device phones home via the Traccar app, it is enrolled under its",
+                "Traccar device id (the /traccar 'id' param) — NOT necessarily the IMEI.",
+            ],
+        })
+        assert "0 devices for" in s
+        assert "3 device(s) are registered" in s
+        assert "Traccar device id" in s
+        assert "backend: healthy" in s
+
+    def test_format_backend_down_diagnosis(self):
+        from nova_core.brain import format_device_lookup
+        s = format_device_lookup({
+            "query": "358638090685186",
+            "device_count": 0,
+            "message": "Backend returned HTTP 502.",
+            "backend_status": "unreachable",
+            "healthy": False,
+            "analysis": [
+                "Backend unreachable (unreachable); Render spins the free tier down after idle. "
+                "Wait ~60s or use a paid instance."
+            ],
+        })
+        assert "Backend returned HTTP 502" in s
+        assert "Render spins the free tier down" in s
+
+    def test_tool_returns_diagnosis_on_no_match(self, monkeypatch):
+        import nova_core.tools.backend as be
+
+        class FakeResp:
+            status_code = 200
+            headers = {"content-type": "application/json"}
+
+            def json(self):
+                return []
+
+        seen = []
+
+        def fake_get(url, params=None, headers=None, timeout=None):
+            seen.append(url)
+            if url.endswith("/search"):
+                return FakeResp()
+            if url.endswith("/devices"):
+                class DR:
+                    status_code = 200
+                    headers = {"content-type": "application/json"}
+
+                    def json(self):
+                        return [
+                            {"id": "a", "identifier": "T8812", "imei": "", "serial": ""},
+                            {"id": "b", "identifier": "s21-phone", "imei": "35598505",
+                             "serial": "SN-09"},
+                        ]
+                return DR()
+            if url.endswith("/health"):
+                class HR:
+                    status_code = 200
+                    headers = {"content-type": "application/json"}
+
+                    def json(self):
+                        return {"status": "ok"}
+                return HR()
+            raise AssertionError(f"unexpected url {url}")
+
+        monkeypatch.setattr(be.httpx, "get", fake_get)
+        tool = be.DeviceLookup()
+        r = tool.execute(query="999999", trigger_locate=False)
+        assert r.success
+        out = r.output
+        assert out["device_count"] == 0
+        assert out["healthy"] is True
+        assert out["total_devices"] == 2
+        assert any("Traccar" in a for a in out["analysis"])
+
+    def test_tool_returns_diagnosis_on_unreachable(self, monkeypatch):
+        import nova_core.tools.backend as be
+        import httpx as real_httpx
+
+        def fake_get(url, params=None, headers=None, timeout=None):
+            raise real_httpx.ConnectError("conn refused")
+
+        monkeypatch.setattr(be.httpx, "get", fake_get)
+        tool = be.DeviceLookup()
+        r = tool.execute(query="358638090685186", trigger_locate=False)
+        assert r.success
+        out = r.output
+        assert out["device_count"] == 0
+        assert out["healthy"] is False
+        assert "unreachable" in out["backend_status"].lower()
+
     def test_format_live_locate_queued(self):
         from nova_core.brain import format_device_lookup
         s = format_device_lookup({
