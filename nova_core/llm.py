@@ -6,6 +6,7 @@ automatic fallback to rule-based dispatch when no LLM is available.
 
 import json
 import logging
+import os
 import time
 import urllib.request
 import urllib.error
@@ -26,6 +27,7 @@ class NovaLLM:
         self._latency_ms = 0.0
         self._checked_at = 0.0
         self._availability_ttl = 20.0
+        self.timeout = int(os.environ.get("OLLAMA_TIMEOUT", "180"))
 
     def check_availability(self) -> dict:
         if self._available is not None and time.time() - self._checked_at < self._availability_ttl:
@@ -47,8 +49,24 @@ class NovaLLM:
             self._latency_ms = (time.time() - start) * 1000
 
             models = [m.get("name", "") for m in data.get("models", [])]
-            self._available = True
             self._checked_at = time.time()
+
+            if not models:
+                # Server is up but nothing is installed — a chat call would hang
+                # waiting for a model to exist. Fall back to deterministic mode.
+                self._available = False
+                logger.warning(
+                    "Ollama at %s has no models installed. Pull one, e.g. "
+                    "'ollama pull llama3.2:3b', then retry.", self.host,
+                )
+                return {
+                    "available": False,
+                    "host": self.host,
+                    "error": "no models installed",
+                    "models_installed": [],
+                }
+
+            self._available = True
 
             if not any(self.model in m for m in models):
                 chosen = self._pick_best_model(models)
@@ -121,8 +139,9 @@ class NovaLLM:
         history: Optional[List[dict]] = None,
         temperature: float = 0.2,
         num_predict: int = 2048,
-        timeout: int = 600,
+        timeout: Optional[int] = None,
     ) -> Tuple[bool, str]:
+        timeout = timeout if timeout is not None else self.timeout
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
@@ -236,7 +255,7 @@ Keep it concise and actionable:"""
             prompt=prompt,
             temperature=0.4,
             num_predict=1024,
-            timeout=600,
+            timeout=self.timeout,
         )
 
         if ok:
