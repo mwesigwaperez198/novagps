@@ -21,11 +21,6 @@ if command -v ollama >/dev/null 2>&1 && ! curl -fsS --max-time 2 http://127.0.0.
   sleep 4
 fi
 
-# Prefer the bigger brain when it's already been pulled, else keep the default.
-if [ -z "${OLLAMA_MODEL:-}" ] && curl -fsS --max-time 2 http://127.0.0.1:11434/api/tags >/dev/null 2>&1 && ollama list 2>/dev/null | grep -q "llama3:8b"; then
-  export OLLAMA_MODEL="llama3:8b"
-fi
-
 if [ -x "$ROOT/.venv/bin/python" ]; then
   PY="$ROOT/.venv/bin/python"
 else
