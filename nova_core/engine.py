@@ -259,7 +259,7 @@ class NovaCognitiveEngine:
         except Exception as e:
             self.state = "shield_only"
             self.init_error = f"huggingface_hub unavailable: {e}"
-            logger.error(self.init_error)
+            logger.warning(self.init_error)
             return None
 
         try:

@@ -364,16 +364,16 @@ def _tool_brief(result: dict, tool_name: str, indent: int = 4) -> str:
     return f"{pad}{_tui(tool_name, 'green')} — {_wrap(str(out)[:280], indent)}"
 
 
-def _render_thought(thought_process: list | None, indent: int = 2) -> None:
+def _render_thought(thought_process, indent: int = 2) -> None:
     if not thought_process:
         return
     pad = " " * indent
+    if isinstance(thought_process, dict):
+        thought_process = [
+            f"{k}: {v}" for k, v in thought_process.items()
+        ]
     for i, step in enumerate(thought_process, 1):
-        line = str(step)
-        if line.startswith("Intent classified"):
-            print(f"{pad}{_tui('◈', 'cyan')} {_tui(line, 'cyan', 'dim')}")
-        else:
-            print(f"{pad}{_tui(f'{i - 1}.', 'grey')} {_wrap(line, indent + 2)}")
+        print(f"{pad}{_tui(f'{i:>2}.', 'cyan')} {_wrap(str(step), indent + 5)}")
 
 
 async def cmd_chat():
@@ -384,12 +384,14 @@ async def cmd_chat():
 
     from .config import get_config
     from .enforcer import NovaEnforcer
+    from . import routes as routes_mod
     from .routes import run_dispatch as lau_dispatch
     from .shield import NovaDeterministicShield
     from .tools import get_registry
 
     cfg = get_config()
     brain = NovaBrain()
+    routes_mod._brain_instance = brain
     shield = NovaDeterministicShield()
     registry = get_registry()
     enforcer = NovaEnforcer(brain.memory)
@@ -532,15 +534,17 @@ async def cmd_chat():
             print(_tui(f"  LAU ▸ dispatch failed: {exc}", "red", "bold"))
             continue
 
-        engine_used = out.get("engine", out.get("engine_used", ""))
-        meta = [out.get("intent", ""), engine_used]
+        steps = out.get("thought_process") or []
+        if steps:
+            print(_tui("  ◈ thinking…", "cyan", "bold"))
+            _render_thought(steps)
+
+        print(_tui(f"  LAU ▸ {_wrap(out.get('response', ''), 2)}", "green", "bold"))
+        meta = [out.get("intent", ""), out.get("engine", out.get("engine_used", ""))]
         if out.get("latency_ms"):
             meta.append(f"{float(out['latency_ms']):.0f}ms")
         if device_id:
             meta.append(f"device={device_id}")
-        print(_tui(f"  LAU ▸ {_wrap(out.get('response', ''), 2)}", "green", "bold"))
-        if out.get("thought_process"):
-            _render_thought(out["thought_process"])
         if meta:
             print(_tui(f"  {' | '.join(m for m in meta if m)}", "grey"))
 

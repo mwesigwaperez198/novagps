@@ -478,20 +478,53 @@ def _classify_intent(command):
     return {"category": "general", "confidence": "medium"}
 
 
-def _greeting_response(brain):
+def _grounding_steps(command: str, intent: dict) -> list:
+    """Mirror-style deliberation: parse the words, then justify the read before acting."""
+    cat = intent["category"]
+    if cat == "greeting":
+        return [
+            f"Reading \"{command}\" — a greeting, no task attached.",
+            "Nothing to execute; the right response is to introduce myself and stand ready.",
+        ]
+    informative = {"system_health", "lau_status", "device_enum", "process_list", "network_info"}
+    acting = {"port_scan", "vuln_scan", "dns_resolve", "traceroute", "device_locate",
+              "device_lock", "device_wipe", "device_message", "device_fingerprint",
+              "camera_discover", "vehicle_track", "shield_validate", "full_scan",
+              "bandwidth", "mtu_test"}
+    how = (
+        "asking for live status"
+        if cat in informative
+        else "asking me to act"
+        if cat in acting
+        else "an open prompt"
+    )
+    return [
+        f"Parsing what you said: \"{command}\".",
+        f"Reading that as {how} -> intent `{cat}`.",
+    ]
+
+
+def _greeting_response(brain, command: str) -> dict:
     status = brain.status() if hasattr(brain, "status") else {}
+    name = status.get("agent_name", "nova-agent")
+    state = status.get("state", "active")
+    engine = status.get("engine_used", "deterministic")
+    tools = status.get("tool_count", 23)
     return {
-        "thought_process": ["Greeting detected", "Reporting agent status"],
+        "thought_process": [
+            f"Reading \"{command}\" — a greeting, no task attached.",
+            "Nothing to execute yet; the role here is to introduce myself and stand ready.",
+            f"Pulling live state to ground the reply: {name}, state={state}, engine={engine}.",
+            f"Replying warmly — identity, engine, {tools} tools, and an invitation to act.",
+        ],
         "intent": "greeting",
         "response": (
-            f"I am LAU, the queen agent of this system. "
-            f"Agent: {status.get('agent_name', 'nova-agent')}. "
-            f"State: {status.get('state', 'active')}. "
-            f"Engine: {status.get('engine_used', 'deterministic')}. "
-            f"Tools: {status.get('tool_count', '23')}. "
-            f"Ask me to scan, track, protect, or analyze anything."
+            f"Hey — I'm {name}, the queen agent running on this system. "
+            f"I'm up and {state}, driven by the {engine} engine with {tools} tools ready to go. "
+            f"I can scan open ports, fingerprint a device, run the shield validators, "
+            f"hunt for cameras, or track a vehicle. What do you want me to take on?"
         ),
-        "engine": status.get("engine_used", ""),
+        "engine": engine,
     }
 
 
@@ -505,21 +538,24 @@ async def run_dispatch(command: str, device_id: str = "") -> dict:
     command = (command or "").strip()
     device_id = device_id or ""
     intent = _classify_intent(command)
-    thought = [f"Intent classified: {intent['category']}"]
+    thought = _grounding_steps(command, intent)
 
     if intent["category"] == "greeting":
         try:
             brain = _get_brain()
-            return _greeting_response(brain)
+            return _greeting_response(brain, command)
         except Exception:
             return {
-                "thought_process": ["Greeting detected", "Brain initializing"],
+                "thought_process": [
+                    f"Reading \"{command}\" — a greeting.",
+                    "Attempted to boot the cognitive brain; it is still initializing.",
+                    "Falling back to deterministic mode so the agent still answers.",
+                ],
                 "intent": "greeting",
                 "response": (
-                    "I am LAU, the queen agent of this system. "
-                    "My brain is initializing — I can still run deterministic "
-                    "validators, scans, and device commands. "
-                    "Ask me to scan, track, protect, or analyze anything."
+                    "Hey — I'm LAU, running in deterministic mode while my brain "
+                    "finishes initializing. I can still run scans, shield validators, "
+                    "and device commands. What would you like me to do?"
                 ),
                 "engine": "initializing",
             }
