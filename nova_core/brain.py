@@ -329,7 +329,7 @@ class NovaBrain:
         parts = []
 
         if "llm_response" in results:
-            llm_resp = results["llm_response"]
+            llm_resp = results.pop("llm_response")
             if llm_resp.get("success"):
                 parts.append(str(llm_resp.get("output", "")).strip())
             else:
