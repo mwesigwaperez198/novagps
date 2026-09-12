@@ -19,13 +19,22 @@ from .config import get_config
 
 logger = logging.getLogger("nova_core.engine")
 
-# Candidate small CPU-friendly models: (repo_id, [filenames], approx_size_bytes)
+# Candidate models ordered smallest-first so Render's 512 MB starter fits.
+# Q2_K quantisation trades some quality for ~40% less RAM vs Q4_K_M.
+# use_mmap=True lets the OS page model weights in/out instead of pinning all
+# of them in heap — critical on memory-constrained hosts.
 MODEL_CANDIDATES = [
     {
-        "repo": "Qwen/Qwen2.5-1.5B-Instruct-GGUF",
-        "files": ["qwen2.5-1.5b-instruct-q4_k_m.gguf"],
-        "size_bytes": 1_050_000_000,
-        "label": "qwen2.5-1.5b-instruct-Q4_K_M",
+        "repo": "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+        "files": ["qwen2.5-0.5b-instruct-q2_k.gguf"],
+        "size_bytes": 230_000_000,
+        "label": "qwen2.5-0.5b-instruct-Q2_K",
+    },
+    {
+        "repo": "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+        "files": ["qwen2.5-0.5b-instruct-q4_k_m.gguf"],
+        "size_bytes": 400_000_000,
+        "label": "qwen2.5-0.5b-instruct-Q4_K_M",
     },
     {
         "repo": "unsloth/Llama-3.2-1B-Instruct-GGUF",
@@ -34,10 +43,10 @@ MODEL_CANDIDATES = [
         "label": "llama-3.2-1b-instruct-Q4_K_M",
     },
     {
-        "repo": "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
-        "files": ["qwen2.5-0.5b-instruct-q4_k_m.gguf"],
-        "size_bytes": 400_000_000,
-        "label": "qwen2.5-0.5b-instruct-Q4_K_M",
+        "repo": "Qwen/Qwen2.5-1.5B-Instruct-GGUF",
+        "files": ["qwen2.5-1.5b-instruct-q4_k_m.gguf"],
+        "size_bytes": 1_050_000_000,
+        "label": "qwen2.5-1.5b-instruct-Q4_K_M",
     },
 ]
 
@@ -79,14 +88,23 @@ class NovaCognitiveEngine:
             "model_dir": str(self._model_dir),
         }
 
+    # Seconds to wait after process start before beginning model load.
+    # Gives uvicorn time to pass the Render health check before the
+    # download + llama init consumes all available RAM.
+    _BOOT_DELAY_S: int = 20
+
     def start_async(self):
         if self._init_thread and self._init_thread.is_alive():
             return
         self._init_thread = threading.Thread(
-            target=self.initialize, name="nova-engine-init", daemon=True
+            target=self._delayed_initialize, name="nova-engine-init", daemon=True
         )
         self._init_thread.start()
-        logger.info("Engine initialization started on background thread.")
+        logger.info("Engine initialization scheduled (boot delay=%ds).", self._BOOT_DELAY_S)
+
+    def _delayed_initialize(self) -> None:
+        time.sleep(self._BOOT_DELAY_S)
+        self.initialize()
 
     def initialize(self, force: bool = False) -> bool:
         with self._lock:
@@ -104,6 +122,17 @@ class NovaCognitiveEngine:
                     f"available_ram_mb={round(self._available_ram_mb(), 1)}",
                     engine="DETERMINISTIC_SHIELD",
                 )
+                return False
+
+            # Probe llama_cpp in a subprocess first — a SIGILL from an AVX-compiled
+            # .so kills the entire process, not just the thread. If the probe exits
+            # non-zero we fall back to the shield without crashing uvicorn.
+            if not self._probe_llama_cpp():
+                self.state = "shield_only"
+                self.engine_used = "DETERMINISTIC_SHIELD"
+                self.init_error = "llama_cpp probe failed (SIGILL or import error) — shield engaged"
+                logger.warning(self.init_error)
+                self._log_lesson(self.init_error, "Fell back to deterministic shield.")
                 return False
 
             self.state = "loading"
@@ -124,6 +153,9 @@ class NovaCognitiveEngine:
                     model_path=self.model_path,
                     n_ctx=self.cfg.embedded_max_ctx,
                     n_threads=self.cfg.embedded_threads,
+                    n_gpu_layers=0,
+                    use_mmap=True,
+                    use_mlock=False,
                     verbose=False,
                     seed=-1,
                 )
@@ -144,6 +176,20 @@ class NovaCognitiveEngine:
                 logger.error(self.init_error)
                 self._log_lesson(self.init_error, "Fell back to deterministic shield.")
                 return False
+
+    def _probe_llama_cpp(self) -> bool:
+        """Run a subprocess that just imports llama_cpp. Returns True if safe."""
+        import subprocess, sys
+        try:
+            result = subprocess.run(
+                [sys.executable, "-c", "from llama_cpp import Llama; print('ok')"],
+                timeout=15,
+                capture_output=True,
+            )
+            return result.returncode == 0
+        except Exception as e:
+            logger.warning("llama_cpp probe exception: %s", e)
+            return False
 
     def execute_reasoning_loop(self, system_prompt: str, task_input: str) -> dict:
         if self.engine_used == "DETERMINISTIC_SHIELD" or self.llm is None:

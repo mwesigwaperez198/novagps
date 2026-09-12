@@ -16,19 +16,26 @@ RUN apt-get update \
         nmap whois dnsutils netcat-openbsd openssl iproute2 iputils-ping traceroute \
     && rm -rf /var/lib/apt/lists/*
 
-# llama-cpp-python builds from source: force a CPU-only build with no
-# extended instruction sets. DLLAMA_AVX* flags must be explicitly OFF —
-# llama's cmake auto-detects the BUILD host's CPU (which may have AVX2)
-# and the resulting binary then crashes on Render's VM with SIGILL.
+# llama-cpp-python: build with NO extended CPU instruction sets.
+# All AVX/FMA/F16C flags must be explicitly disabled — llama's cmake
+# auto-detects the build host CPU (AVX2 capable) and the resulting .so
+# then crashes with SIGILL on Render's VM which lacks those instructions.
+# Cache-bust token: v3
 ENV CMAKE_ARGS="-DLLAMA_METAL=OFF -DLLAMA_BLAS=OFF -DLLAMA_AVX=OFF -DLLAMA_AVX2=OFF -DLLAMA_AVX512=OFF -DLLAMA_FMA=OFF -DLLAMA_F16C=OFF" \
-    CFLAGS="-O2 -march=x86-64" \
-    CXXFLAGS="-O2 -march=x86-64"
+    CFLAGS="-O2 -march=x86-64 -mno-avx -mno-avx2 -mno-sse4.1 -mno-sse4.2" \
+    CXXFLAGS="-O2 -march=x86-64 -mno-avx -mno-avx2 -mno-sse4.1 -mno-sse4.2"
 
 COPY backend/requirements.txt /app/requirements.txt
 RUN pip install --upgrade pip \
-    && pip install --no-cache-dir -r /app/requirements.txt \
-    && pip install --no-cache-dir llama-cpp-python==0.2.76 huggingface_hub==0.23.0 || \
-       echo "[nova] llama-cpp-python unavailable — deterministic shield will be used"
+    && pip install --no-cache-dir -r /app/requirements.txt
+
+# Install llama-cpp-python in a fully isolated step with explicit no-AVX flags.
+# The || true ensures a compile failure never blocks the image build.
+RUN CMAKE_ARGS="-DLLAMA_METAL=OFF -DLLAMA_BLAS=OFF -DLLAMA_AVX=OFF -DLLAMA_AVX2=OFF -DLLAMA_AVX512=OFF -DLLAMA_FMA=OFF -DLLAMA_F16C=OFF" \
+    CFLAGS="-O2 -march=x86-64 -mno-avx -mno-avx2 -mno-sse4.1 -mno-sse4.2" \
+    CXXFLAGS="-O2 -march=x86-64 -mno-avx -mno-avx2 -mno-sse4.1 -mno-sse4.2" \
+    pip install --no-cache-dir --force-reinstall llama-cpp-python==0.2.76 huggingface_hub==0.23.0 \
+    || echo "[nova] llama-cpp-python unavailable — deterministic shield will be used"
 
 COPY backend/ /app/
 COPY nova_core/ /app/nova_core/
