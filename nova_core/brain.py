@@ -233,12 +233,21 @@ class NovaBrain:
             return results
 
         if parsed.get("actions"):
-            for action in parsed.get("actions", []):
-                tool_name = action.get("tool")
-                params = action.get("params", {})
-                if tool_name:
-                    result = self.tools.execute(tool_name, **params)
-                    results[tool_name] = result.to_dict()
+            loop = asyncio.get_event_loop()
+            actions = parsed.get("actions", [])
+            jobs = [
+                (a.get("tool"), a.get("params", {}))
+                for a in actions if a.get("tool")
+            ]
+            if jobs:
+                runner = asyncio.gather(*[
+                    loop.run_in_executor(None, lambda n=t, p=p: self.tools.execute(n, **p))
+                    for t, p in jobs
+                ])
+                executed = await runner
+                for (tool_name, _), result in zip(jobs, executed):
+                    if result:
+                        results[tool_name] = result.to_dict()
             return results
 
         ok, answer = await loop.run_in_executor(None, lambda: self.llm.generate(
@@ -374,7 +383,14 @@ class NovaBrain:
                     actions.append({"tool": "vuln_scan", "params": {"base_url": base_url}})
                     actions.append({"tool": "dns_resolve", "params": {"domain": host}})
                     actions.append({"tool": "connectivity_probe", "params": {"host": host, "port": port}})
-                    actions.append({"tool": "port_scan", "params": {"host": host, "ports": "1-1024"}})
+                    actions.append({
+                        "tool": "port_scan",
+                        "params": {
+                            "host": host,
+                            "ports": "21,22,23,25,53,80,110,143,443,3306,5432,6379,8000,8080,8443,9090",
+                            "timeout": 0.8,
+                        },
+                    })
                     continue
                 if tool_name == "packet_capture":
                     import re as _re2

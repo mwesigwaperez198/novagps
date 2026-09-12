@@ -577,8 +577,7 @@ async def cmd_chat():
 
         tools = out.get("tools_executed") or []
         if tools:
-            print()
-            print(_tui(f"  ⚙ RUN: {' → '.join(tools)}", "magenta", "bold"))
+            print(_tui("  ⚙ RUN: " + " → ".join(tools), "green", "bold"))
             for tool_name, result in (out.get("results") or {}).items():
                 if tool_name == "_reasoning":
                     continue
