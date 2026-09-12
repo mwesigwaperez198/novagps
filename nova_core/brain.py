@@ -188,22 +188,29 @@ class NovaBrain:
         return results
 
     async def _process_with_ollama(self, query: str, lessons: list, system_state: dict) -> dict:
-        tool_schemas = self.tools.get_schema()
-        selected = self.llm.select_tool(query, tool_schemas)
-
+        parsed = self._parse_request(query)
         results = {}
-        if not selected:
-            loop = asyncio.get_event_loop()
+        loop = asyncio.get_event_loop()
+
+        if parsed.get("actions"):
+            for action in parsed.get("actions", []):
+                tool_name = action.get("tool")
+                params = action.get("params", {})
+                if tool_name:
+                    result = self.tools.execute(tool_name, **params)
+                    results[tool_name] = result.to_dict()
+            if parsed.get("intent") == "status":
+                results.update(await self._status_response())
+            if not results:
+                results["llm_response"] = {"success": False, "output": "No matching capability found."}
+                return results
+        else:
             ok, answer = await loop.run_in_executor(None, lambda: self.llm.generate(
                 query,
                 system=self._system_prompt,
             ))
             results["llm_response"] = {"success": ok, "output": answer}
             return results
-
-        for tool_name in selected:
-            result = self.tools.execute(tool_name)
-            results[tool_name] = result.to_dict()
 
         state_summary = json.dumps({
             "lessons": [l.get("obstacle", "")[:100] for l in lessons[:3]],

@@ -211,7 +211,7 @@ Response:"""
             prompt=prompt,
             temperature=0.0,
             num_predict=256,
-            timeout=30,
+            timeout=self.timeout,
         )
 
         if not ok:
