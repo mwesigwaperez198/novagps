@@ -495,10 +495,15 @@ def _greeting_response(brain):
     }
 
 
-@nova_router.post("/agent/dispatch")
-async def nova_agent_dispatch(req: NovaAgentCommandRequest):
-    command = req.command.strip()
-    device_id = req.device_id or ""
+async def run_dispatch(command: str, device_id: str = "") -> dict:
+    """Shared LAU dispatch chain used by the HTTP endpoint and the terminal chat.
+
+    Classifies the command, builds device/action payloads for backend intents,
+    and routes everything else through the cognitive engine tool dispatch.
+    Returns the same dict shape the /nova-core/agent/dispatch endpoint serves.
+    """
+    command = (command or "").strip()
+    device_id = device_id or ""
     intent = _classify_intent(command)
     thought = [f"Intent classified: {intent['category']}"]
 
@@ -676,6 +681,11 @@ async def nova_agent_dispatch(req: NovaAgentCommandRequest):
         "tools_executed": tools,
         "results": result.get("results", {}),
     }
+
+
+@nova_router.post("/agent/dispatch")
+async def nova_agent_dispatch(req: NovaAgentCommandRequest):
+    return await run_dispatch(req.command, req.device_id)
 
 
 def register_nova_routes(app):

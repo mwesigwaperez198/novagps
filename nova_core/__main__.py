@@ -13,6 +13,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -293,6 +294,295 @@ def cmd_validators() -> int:
     return 0
 
 
+_COLORS = {
+    "reset": 0, "bold": 1, "dim": 2, "italic": 3, "underline": 4,
+    "black": 30, "red": 31, "green": 32, "yellow": 33, "blue": 34,
+    "magenta": 35, "cyan": 36, "white": 37, "grey": 90,
+}
+
+
+def _use_color() -> bool:
+    try:
+        return sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+    except Exception:
+        return False
+
+
+def _tui(text: str, *names: str) -> str:
+    if not _use_color():
+        return text
+    codes = ";".join(str(_COLORS[name]) for name in names if name in _COLORS)
+    return f"\033[{codes}m{text}\033[0m" if codes else text
+
+
+def _wrap(text: str, indent: int = 2) -> str:
+    import shutil
+    width = max(40, shutil.get_terminal_size((100, 24)).columns - indent)
+    words, lines, cur = text.split(), [], ""
+    for word in words:
+        if cur and len(cur) + 1 + len(word) > width:
+            lines.append(cur)
+            cur = word
+        else:
+            cur = f"{cur} {word}".strip()
+    if cur:
+        lines.append(cur)
+    pad = " " * indent
+    return f"\n{pad}".join(lines)
+
+
+def _tool_brief(result: dict, tool_name: str, indent: int = 4) -> str:
+    pad = " " * indent
+    if not isinstance(result, dict):
+        return f"{pad}{tool_name}: {result}"
+    if not result.get("success"):
+        return (
+            f"{pad}{_tui(tool_name, 'red', 'bold')} FAILED — "
+            f"{result.get('error') or result.get('output')}"
+        )
+    out = result.get("output")
+    if isinstance(out, dict):
+        bits = []
+        if "finding_count" in out:
+            bits.append(f"findings={out['finding_count']} risk={out.get('risk_level', '?')}")
+        if "device_count" in out:
+            bits.append(f"devices={out['device_count']}")
+        if "alert_count" in out:
+            bits.append(f"alerts={out['alert_count']}")
+        if "status" in out and isinstance(out.get("status"), str):
+            bits.append(f"status={out['status']}")
+        if "endpoints" in out:
+            bits.append(f"endpoints={len(out['endpoints'])}")
+        if "lessons" in out:
+            bits.append(f"lessons={len(out['lessons'])}")
+        if "tools" in out:
+            bits.append(f"tools={len(out['tools'])}")
+        if bits:
+            return f"{pad}{_tui(tool_name, 'green')} — {' · '.join(bits)}"
+        snippet = _wrap(str(out)[:280].replace("\n", " "), indent)
+        return f"{pad}{_tui(tool_name, 'green')}\n{snippet}"
+    return f"{pad}{_tui(tool_name, 'green')} — {_wrap(str(out)[:280], indent)}"
+
+
+def _render_thought(thought_process: list | None, indent: int = 2) -> None:
+    if not thought_process:
+        return
+    pad = " " * indent
+    for i, step in enumerate(thought_process, 1):
+        line = str(step)
+        if line.startswith("Intent classified"):
+            print(f"{pad}{_tui('◈', 'cyan')} {_tui(line, 'cyan', 'dim')}")
+        else:
+            print(f"{pad}{_tui(f'{i - 1}.', 'grey')} {_wrap(line, indent + 2)}")
+
+
+async def cmd_chat():
+    """Personal LAU terminal — the same dispatch chain as the web HUD."""
+
+    import httpx
+    import urllib.parse
+
+    from .config import get_config
+    from .enforcer import NovaEnforcer
+    from .routes import run_dispatch as lau_dispatch
+    from .shield import NovaDeterministicShield
+    from .tools import get_registry
+
+    cfg = get_config()
+    brain = NovaBrain()
+    shield = NovaDeterministicShield()
+    registry = get_registry()
+    enforcer = NovaEnforcer(brain.memory)
+
+    agent = brain.agent_name
+    device_id = ""
+    token = os.environ.get("NOVA_TOKEN", "")
+    color = _use_color()
+
+    print()
+    print(_tui("╔══════════════════════════════════════════════════════════╗", "cyan", "bold"))
+    print(f"{_tui('║', 'cyan', 'bold')}  {_tui('NOVA-CORE', 'white', 'bold')} · {_tui(agent.upper(), 'yellow', 'bold')} — QUEEN AGENT TERMINAL")
+    print(f"{_tui('║', 'cyan', 'bold')}  talk to LAU directly · tools run on this host")
+    print(_tui("╚══════════════════════════════════════════════════════════╝", "cyan", "bold"))
+    print(_tui("  type /help for commands · /quit to exit (or Ctrl+C)\n", "grey"))
+
+    while True:
+        try:
+            raw = input(
+                _tui(f"{agent.lower()} ▸ ", "cyan", "bold") if color else f"{agent.lower()}> "
+            ).strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            print(_tui(f"{agent} is going quiet. Session written to memory.", "grey"))
+            break
+        if not raw:
+            continue
+
+        cmd = raw.strip().lower()
+
+        if cmd in ("quit", "exit", "q", "/quit"):
+            print(_tui("Closing the LAU terminal.", "grey"))
+            break
+
+        if cmd in ("/help", "help", "?"):
+            print(_tui(
+                "commands:\n"
+                "  /device <id>      set the device LAU acts on for locate/lock/message/wipe\n"
+                "  /tools            list every tool LAU can run on this host\n"
+                "  /status           full LAU system status\n"
+                "  /engine           engine + model state\n"
+                "  /memory           vault stats (lessons, alerts, escrow)\n"
+                "  /lessons [n]      show the n most recent learned lessons\n"
+                "  /validators       run the 3 definitive module validators (compile+run)\n"
+                "  /shield <text>    push an intent straight through the shield\n"
+                "  /clear            wipe the screen\n"
+                "  /quit             leave\n"
+                "anything else is a message for LAU — try 'help', 'scan open ports',\n"
+                "'system status', 'locate the device', 'lock the device'.", "cyan"
+            ))
+            continue
+
+        if cmd == "/clear":
+            os.system("clear" if os.name != "nt" else "cls")
+            continue
+
+        if cmd.startswith("/device"):
+            parts = raw.split(None, 1)
+            if len(parts) < 2:
+                print(_tui(f"  current device: {device_id or 'none'} — set one with /device <id>", "grey"))
+            else:
+                device_id = parts[1].strip()
+                print(_tui(f"  ✓ LAU now acts on device `{device_id}`", "green", "bold"))
+            continue
+
+        if cmd == "/tools":
+            print(_tui("  registered tools:", "cyan", "bold"))
+            for cat in sorted({t["category"] for t in registry.list_tools()}):
+                names = [t["name"] for t in registry.list_tools() if t["category"] == cat]
+                print(f"    {_tui(cat, 'magenta', 'bold'):<12} {', '.join(names)}")
+            continue
+
+        if cmd == "/status":
+            status = brain.status() if hasattr(brain, "status") else {}
+            st = enforcer.recover_task_state() or {}
+            stats = brain.memory.get_memory_stats()
+            print(_tui(f"  AGENT    ", "cyan", "bold") + f"{status.get('agent_name', agent)}  {_tui(status.get('state', '?'), 'green' if status.get('state') in ('active',) else 'yellow')}")
+            print(_tui(f"  ENGINE   ", "cyan", "bold") + f"{status.get('engine_used', 'deterministic')}  model={status.get('model', '-')}  latency={status.get('latency_ms', 0)}ms")
+            print(_tui(f"  TOOLS    ", "cyan", "bold") + f"{status.get('tool_count', len(registry.list_tools()))} registered")
+            print(_tui(f"  MEMORY   ", "cyan", "bold") + f"lessons={stats.get('total_lessons', 0)} scans={stats.get('total_scans', 0)} alerts={stats.get('total_alerts', 0)} unacked={stats.get('unacknowledged_alerts', 0)}")
+            print(_tui(f"  VAULT    ", "cyan", "bold") + f"escrow task={st.get('task_id', 'none')} progress={st.get('progress', 0)}%")
+            print(_tui(f"  BACKEND  ", "cyan", "bold") + f"{cfg.backend_url}  {_tui('(action execution enabled)' if token or device_id else '(read-only — set /device + NOVA_TOKEN to execute)', 'grey')}")
+            continue
+
+        if cmd == "/engine":
+            st = brain.engine.status()
+            print(_tui(f"  engine={st.get('engine_used', 'UNINITIALIZED')} state={st.get('state')} model={st.get('model', '-')} latency={st.get('latency_ms', 0)}ms ram={st.get('available_ram_mb', '?')}MB", "cyan"))
+            if st.get("init_error"):
+                print(_tui(f"  init error: {st.get('init_error')}", "red"))
+            llm = brain.llm.check_availability()
+            print(_tui(f"  ollama={_tui('ONLINE', 'green') if llm.get('available') else _tui('OFFLINE (embedded brain substitutes)', 'yellow')}", "grey"))
+            continue
+
+        if cmd == "/memory":
+            stats = brain.memory.get_memory_stats()
+            for k, v in stats.items():
+                print(f"    {k}: {v}")
+            continue
+
+        if cmd.startswith("/lessons"):
+            try:
+                limit = int(cmd.split(None, 1)[1])
+            except (IndexError, ValueError):
+                limit = 5
+            lessons = brain.memory.get_recent_lessons(limit=limit)
+            for lesson in lessons:
+                when = str(lesson.get("created_at", ""))[:19]
+                print(f"    {_tui('[learned]', 'magenta')} {when} · {lesson.get('category')} · {lesson.get('obstacle', '')[:90]}")
+            if not lessons:
+                print(_tui("    no lessons recorded yet", "grey"))
+            continue
+
+        if cmd == "/validators":
+            cmd_validators()
+            continue
+
+        if cmd.startswith("/shield"):
+            prompt = raw[len("/shield"):].strip()
+            if not prompt:
+                prompt = (
+                    "A compromised asset terminal is streaming fabricated GPS fixes with "
+                    "NaN latitude, infinite longitude, and wrapped timestamps to escape the "
+                    "tracking validation stream. Emit a validation filter."
+                )
+            print(_tui("  shield engaging…", "cyan", "dim"))
+            out = shield.process_deterministic_fallback(task_input=prompt)
+            payload = out.get("output_payload", {})
+            _render_thought(out.get("thought_process"))
+            print(_tui(f"  {payload.get('verdict', '?')}", "white", "bold"))
+            print(_tui(f"  enforced -> {payload.get('action_enforced', '?')}", "magenta", "bold"))
+            print("  " + _wrap(str(payload.get("response", ""))[:600].replace("\n", " "), 2))
+            continue
+
+        # ── LAU dispatch (same chain as the web HUD) ──────────────────────
+        print()
+        print(_tui(f"  YOU ▸ {_wrap(raw, 2)}", "yellow", "bold"))
+        try:
+            out = await lau_dispatch(raw, device_id)
+        except Exception as exc:
+            print(_tui(f"  LAU ▸ dispatch failed: {exc}", "red", "bold"))
+            continue
+
+        engine_used = out.get("engine", out.get("engine_used", ""))
+        meta = [out.get("intent", ""), engine_used]
+        if out.get("latency_ms"):
+            meta.append(f"{float(out['latency_ms']):.0f}ms")
+        if device_id:
+            meta.append(f"device={device_id}")
+        print(_tui(f"  LAU ▸ {_wrap(out.get('response', ''), 2)}", "green", "bold"))
+        if out.get("thought_process"):
+            _render_thought(out["thought_process"])
+        if meta:
+            print(_tui(f"  {' | '.join(m for m in meta if m)}", "grey"))
+
+        tools = out.get("tools_executed") or []
+        if tools:
+            print(_tui(f"  → ran: {', '.join(tools)}", "cyan", "dim"))
+        for tool_name, result in (out.get("results") or {}).items():
+            if tool_name == "_reasoning":
+                continue
+            print(_tool_brief(result, tool_name))
+
+        action = out.get("action")
+        if action:
+            print()
+            print(_tui("  ┌─ EXECUTABLE ACTION ─────────────────────────────", "magenta"))
+            print(_tui(f"  │ {action.get('method', 'GET')} {action['endpoint']}", "magenta"))
+            print(_tui("  └──────────────────────────────────────────────────", "magenta"))
+            yn = input(_tui("  execute against backend? [y/N] ", "cyan", "bold") if color else "  execute? [y/N] ").strip().lower()
+            if yn in ("y", "yes"):
+                endpoint = action["endpoint"]
+                method = action.get("method", "POST")
+                if action.get("extract_body"):
+                    msg = input(_tui("  message text> ", "cyan") if color else "  message> ").strip()
+                    if not msg:
+                        msg = "Commanded by LAU terminal"
+                    join = "&" if "?" in endpoint else "?"
+                    endpoint = f"{endpoint}{join}message={urllib.parse.quote(msg)}"
+                url = cfg.backend_url.rstrip("/") + endpoint
+                headers = {"Authorization": f"Bearer {token}"} if token else {}
+                try:
+                    resp = httpx.request(method, url, timeout=30, headers=headers)
+                    try:
+                        payload = resp.json()
+                    except Exception:
+                        payload = resp.text[:400]
+                    print(_tui(f"  ← {resp.status_code} {_wrap(str(payload)[:500], 2)}", "green" if resp.status_code < 400 else "red"))
+                except Exception as exc:
+                    print(_tui(f"  ✗ backend unreachable: {exc} — start the API or set NOVA_BACKEND_URL", "red"))
+            else:
+                print(_tui("  [skipped — nothing executed]", "grey"))
+
+
 def main():
     parser = argparse.ArgumentParser(description="NOVA-CORE Agent")
     parser.add_argument("--patrol", action="store_true", help="Start autonomous patrol daemon")
@@ -300,12 +590,13 @@ def main():
     parser.add_argument("--scan", action="store_true", help="Run all security scans")
     parser.add_argument("--status", action="store_true", help="Show system status")
     parser.add_argument("--query", type=str, help="Process a single query")
+    parser.add_argument("--chat", action="store_true", help="Launch the LAU chat terminal (default)")
     parser.add_argument(
         "--validators",
         action="store_true",
         help="Run the definitive LAU module validation prompts (hardware peripheral / tracking logic / geofence verification)",
     )
-    parser.add_argument("--interactive", action="store_true", help="Interactive mode (default)")
+    parser.add_argument("--interactive", action="store_true", help="Basic bare REPL (no TUI)")
     args = parser.parse_args()
 
     setup_file_logging()
@@ -322,8 +613,10 @@ def main():
         asyncio.run(cmd_query(args.query))
     elif args.validators:
         sys.exit(cmd_validators())
-    else:
+    elif args.interactive:
         asyncio.run(cmd_interactive())
+    else:
+        asyncio.run(cmd_chat())
 
 
 if __name__ == "__main__":
