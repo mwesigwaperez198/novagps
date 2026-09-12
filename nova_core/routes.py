@@ -517,24 +517,17 @@ def _grounding_steps(command: str, intent: dict) -> list:
 
 def _greeting_response(brain, command: str) -> dict:
     status = brain.status() if hasattr(brain, "status") else {}
-    name = status.get("agent_name", "nova-agent")
-    state = status.get("state", "active")
-    engine = status.get("engine_used", "deterministic")
-    tools = status.get("tool_count", 23)
+    engine = status.get("engine_used", "")
+    opcodes = brain._parse_opcodes(command) if hasattr(brain, "_parse_opcodes") else ["OP_CONVERSE"]
     return {
         "thought_process": [
-            f"Reading \"{command}\" — a greeting, no task attached.",
-            "Nothing to execute yet; the role here is to introduce myself and stand ready.",
-            f"Pulling live state to ground the reply: {name}, state={state}, engine={engine}.",
-            f"Replying warmly — identity, engine, {tools} tools, and an invitation to act.",
+            f"Parsing \"{command}\" into token opcodes: {', '.join(opcodes)}.",
+            "No actionable opcode carries an execution payload — this is chatter, not a directive.",
+            f"Grounding the reply in live state: {engine} engine, tools and memory intact.",
+            "Forging a fresh reply from the dynamic response matrix, not a static block.",
         ],
         "intent": "greeting",
-        "response": (
-            f"Hey — I'm {name}, the queen agent running on this system. "
-            f"I'm up and {state}, driven by the {engine} engine with {tools} tools ready to go. "
-            f"I can scan open ports, fingerprint a device, run the shield validators, "
-            f"hunt for cameras, or track a vehicle. What do you want me to take on?"
-        ),
+        "response": brain.compose_dynamic_response(command),
         "engine": engine,
     }
 

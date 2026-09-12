@@ -6,8 +6,10 @@ a coherent agent loop. Can operate in autonomous mode
 """
 
 import asyncio
+import hashlib
 import json
 import logging
+import re
 import time
 from typing import Optional, List, Dict, Any
 from pathlib import Path
@@ -338,7 +340,7 @@ class NovaBrain:
         if "_reasoning" in results:
             only_reasoning = len(results) == 1
             reasoning = results.pop("_reasoning")
-            if only_reasoning and reasoning.get("success"):
+            if reasoning.get("success"):
                 output = reasoning.get("output")
                 if isinstance(output, dict):
                     engine = output.get("engine", "")
@@ -346,17 +348,17 @@ class NovaBrain:
                     verdict = str(payload.get("verdict", ""))
                     benign = "NOMINAL" in verdict and not payload.get("alert_badges")
                     if engine != "EMBEDDED_LLM" and benign:
-                        # No model online and no threat raised — answer like a person,
-                        # not like a log sink.
-                        return self._conversational_response(query)
-            if reasoning.get("success"):
-                output = reasoning.get("output")
-                if isinstance(output, dict):
-                    payload = output.get("output_payload", {}) or {}
-                    parts.append(
-                        f"[{output.get('engine', 'ENGINE')} · {output.get('latency_ms', 0)}ms]\n"
-                        f"{payload.get('response', 'NOVA processed.')}"
-                    )
+                        if only_reasoning:
+                            # No model online and no threat raised — answer like a person,
+                            # not like a log sink.
+                            return self._conversational_response(query)
+                    elif engine == "EMBEDDED_LLM":
+                        parts.append(f"NOVA-CORE reasoning:\n{payload.get('response', 'NOVA processed.')}")
+                    else:
+                        parts.append(
+                            f"[{engine} · {output.get('latency_ms', 0)}ms]\n"
+                            f"{payload.get('response', 'NOVA processed.')}"
+                        )
                 else:
                     parts.append(f"NOVA-CORE reasoning:\n{output}")
             else:
@@ -391,40 +393,117 @@ class NovaBrain:
         return "\n\n".join(parts)
 
     def _conversational_response(self, query: str) -> str:
-        """Deterministic-mode chit-chat: echo, stay in character, stay honest."""
-        q = query.strip()
-        lowered = q.lower()
-        stats = self.memory.get_memory_stats()
+        return self.compose_dynamic_response(query)
 
-        if any(p in lowered for p in (
+    _OPCODE_SIGS = [
+        ("OP_SCAN", ("scan", "port", "fingerprint", "open port", "subnet", "banner")),
+        ("OP_SHIELD", ("shield", "secure", "protect", "filter", "sanitize", "validate")),
+        ("OP_PERIPH", ("camera", "video", "peripheral", "hardware", "rtsp", "descriptor", "media")),
+        ("OP_RESTORE", ("restore", "recover", "deleted", "backup", "recovery", "wal")),
+        ("OP_DEVICE", ("device", "locate", "lock", "wipe", "track", "remote", "sms")),
+        ("OP_NET", ("network", "wifi", "interface", "arp", "connectivity", "router")),
+        ("OP_OSINT", ("whois", "dns", "domain", "email", "osint", "lookup")),
+        ("OP_STATUS", ("status", "health", "overview", "running", "process", "metrics")),
+        ("OP_CONVERSE", ("hello", "hey", "hi", "yo", "sup", "how are", "capabilities",
+                         "name", "who are", "help", "what can", "talk", "there")),
+    ]
+    _OP_TO_TOOL = {
+        "OP_SCAN": "port_scan",
+        "OP_SHIELD": "the shield validators",
+        "OP_PERIPH": "camera discover",
+        "OP_DEVICE": "device locate/lock",
+        "OP_NET": "network info",
+        "OP_OSINT": "dns/whois",
+        "OP_RESTORE": "file integrity",
+        "OP_STATUS": "system info",
+    }
+    _TURN_SEED = 0
+
+    def _parse_opcodes(self, query: str) -> list:
+        c = (query or "").lower()
+        matched = [op for op, keys in self._OPCODE_SIGS if any(k in c for k in keys)]
+        return matched or ["OP_CONVERSE"]
+
+    def compose_dynamic_response(self, query: str) -> str:
+        """Dynamic Heuristic Opcode Engine — forges a fresh, state-grounded reply
+        from the prompt's token opcodes instead of pasting a static block."""
+        c = (query or "").strip().lower()
+        opcodes = self._parse_opcodes(c)
+        pure_chatter = set(opcodes) == {"OP_CONVERSE"}
+
+        stats = self.memory.get_memory_stats()
+        tools = self.tools.list_tools()
+        lessons = stats.get("total_lessons", 0)
+        alerts = stats.get("unacknowledged_alerts", 0)
+        engine = self.engine_used
+        name = self.agent_name
+
+        asking_name = any(p in c for p in (
+            "who are you", "your name", "yo name", "what are you", "who is lau",
+            "identify yourself", "what's your name", "what is your name"))
+        asking_caps = any(p in c for p in (
+            "what can you do", "what do you do", "capabilities", "your skills",
+            "what tools", "help me", "show me what", "what are you capable"))
+        asking_state = any(p in c for p in (
             "how are you", "how's it going", "how's life", "how are things",
-            "are you ok", "are you okay", "you alive", "you awake",
-        )):
-            return (
-                f"I'm sharp — all systems green, running on the {self.engine_used} engine, "
-                f"{stats.get('total_lessons', 0)} lessons banked in memory. "
-                f"What do you want me to tackle, boss?"
+            "you ok", "you alive", "you awake", "are you up"))
+
+        seed = int(hashlib.sha256(c.encode()).hexdigest(), 16)
+
+        def pick(pool):
+            idx = (self._TURN_SEED + seed) % len(pool)
+            return pool[idx]
+
+        self.__class__._TURN_SEED += 1
+
+        openers = ["Hey —", "Yes —", "At attention.", "You have my ear."]
+        roles = [
+            f"queen agent holding this NOVARA stack",
+            f"operating core of this loadout on the {engine} engine",
+            f"one who runs the gate in here",
+        ]
+        invites = [
+            "What do we take on?",
+            "Give me a target.",
+            "Point me and I move.",
+            "I'm watching — tell me where you need me.",
+        ]
+        role = pick(roles)
+        opener = pick(openers)
+        invite = pick(invites)
+
+        if asking_name:
+            body = f"I'm {name}, the {role} — every pipeline, device, and perimeter here answers to me. {invite}"
+        elif asking_caps:
+            names = ", ".join(t["name"] for t in tools[:12])
+            body = (
+                f"I run {len(tools)} tools live — {names} — backed by the shield "
+                f"and the device command chain. {invite}"
+            )
+        elif asking_state:
+            body = (
+                f"Green across the board: {engine} engine, {lessons} lessons banked, "
+                f"{alerts} unacked alerts. Nothing slips past. {invite}"
+            )
+        elif pure_chatter and any(q in c for q in ("what", "why", "how", "tell me", "explain")) and len(c) > 18:
+            body = (
+                f"That one needs the reasoning model, which isn't connected, so I won't "
+                f"fake an answer. But I'm fully live as the {role} — throw me a real "
+                f"task and I'll hit it."
+            )
+        elif pure_chatter:
+            body = f"I'm here, the {role} — tools synced, memory {lessons} lessons deep. {invite}"
+        else:
+            mapped = ", ".join(
+                tk for tk in (self._OP_TO_TOOL.get(op) for op in opcodes)
+                if tk
+            )
+            body = (
+                f"{', '.join(opcodes)} detected on your prompt — that maps to "
+                f"{mapped}, for real. Say go and I execute."
             )
 
-        if any(p in lowered for p in ("thank", "thanks", "appreciate", "good job", "nice work")):
-            return "Any time. Keep the platform healthy and nobody can touch it. What's next?"
-
-        if any(p in lowered for p in (
-            "what do you do", "what can you do", "what are you capable", "your skills",
-            "show me what", "capabilities",
-        )):
-            return self._help_text()
-
-        if any(p in lowered for p in ("are you there", "you there", "are you alive", "are you awake")):
-            return "Always. I'm awake, memory intact, engines warm. Give me a target and I'm yours."
-
-        tool_names = ", ".join(t["name"] for t in self.tools.list_tools()[:10])
-        return (
-            f"I heard you say: \"{q}\". "
-            f"The reasoning model isn't connected right now, so I won't fake a free-form answer — "
-            f"but I'm fully operational on tools. Ask me to \"scan open ports\", \"system status\", "
-            f"\"run the shield validators\", or name any of these and I'll execute it: {tool_names}."
-        )
+        return f"{opener} {body}"
 
     def _format_output(self, tool_name: str, output: dict) -> str:
         formatters = {
