@@ -59,3 +59,47 @@ class TestPersona:
         assert result["intent"] != "security_intercept"
         assert len(result["response"]) > 100
         assert "NOVA-CORE reasoning" not in result["response"]
+
+
+class TestThreatPanel:
+    def test_threat_scan_parses_target_and_host(self):
+        from nova_core.brain import NovaBrain
+        parsed = NovaBrain()._parse_request(
+            "can you analyse threats from https://novagps.onrender.com"
+        )
+        tools = [a["tool"] for a in parsed["actions"]]
+        assert tools == ["vuln_scan", "dns_resolve", "connectivity_probe", "port_scan"]
+        vuln = parsed["actions"][0]["params"]
+        assert vuln["base_url"] == "https://novagps.onrender.com"
+        assert parsed["actions"][2]["params"]["port"] == 443
+
+    def test_threat_scan_honors_explicit_port(self):
+        from nova_core.brain import NovaBrain
+        parsed = NovaBrain()._parse_request("analyze threats from http://example.com:8080")
+        conv = parsed["actions"][2]["params"]
+        assert conv["host"] == "example.com"
+        assert conv["port"] == 8080
+
+    def test_verdict_note_appended_for_scan(self):
+        from nova_core.brain import NovaBrain
+        results = {"vuln_scan": {
+            "success": True,
+            "output": {
+                "target": "https://novagps.onrender.com",
+                "findings": [
+                    {"severity": "medium", "fix": "Add 'x-frame-options' header to responses"},
+                    {"severity": "high", "fix": "Disable /admin in production"},
+                ],
+                "finding_count": 2,
+                "risk_level": "high",
+            },
+        }}
+        note = NovaBrain()._threat_verdict(results)
+        assert "Threat summary" in note
+        assert "risk **HIGH**" in note
+        assert "1 high, 1 medium" in note
+        assert "Quick wins" in note
+
+    def test_no_verdict_without_scan(self):
+        from nova_core.brain import NovaBrain
+        assert NovaBrain()._threat_verdict({"system_info": {"success": True}}) == ""

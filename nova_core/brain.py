@@ -405,7 +405,38 @@ class NovaBrain:
             elif output:
                 parts.append(f"**{tool_name}:** {output}")
 
-        return "\n\n".join(parts)
+        return "\n\n".join(parts) + self._threat_verdict(results)
+
+    def _threat_verdict(self, results: dict) -> str:
+        vuln = results.get("vuln_scan")
+        if not isinstance(vuln, dict) or not vuln.get("success"):
+            return ""
+        out = vuln.get("output", {})
+        if not isinstance(out, dict):
+            return ""
+        target = str(out.get("target", "the target"))
+        findings = out.get("findings") or []
+        risk = str(out.get("risk_level", "unknown"))
+        count = len(findings)
+        sev = [f for f in findings if f.get("severity") == "high"]
+        med = [f for f in findings if f.get("severity") == "medium"]
+
+        verdict = {
+            "low": "the surface is reasonably clean — no glaring holes found.",
+            "medium": "it's not in ruins, but the medium items should be tightened before attackers get curious.",
+            "high": "there are real gaps here. Treat this as actionable, not decorative.",
+        }.get(risk, "mixed signal — worth a look.")
+
+        note = (
+            f"⚠ Threat summary — {target}: {count} finding(s) identified "
+            f"({len(sev)} high, {len(med)} medium, overall risk **{risk.upper()}**). "
+            f"Honest verdict: {verdict}"
+        )
+        fixes = [f.get("fix") for f in findings if f.get("fix")][:3]
+        if fixes:
+            unique = list(dict.fromkeys(fixes))
+            note += " Quick wins: " + "; ".join(unique) + "."
+        return "\n\n" + note
 
     def _conversational_response(self, query: str) -> str:
         return self.compose_dynamic_response(query)
