@@ -192,6 +192,14 @@ class NovaBrain:
         results = {}
         loop = asyncio.get_event_loop()
 
+        if parsed.get("intent") == "status":
+            results.update(await self._status_response())
+            return results
+
+        if parsed.get("intent") == "help":
+            results["help"] = {"text": self._help_text()}
+            return results
+
         if parsed.get("actions"):
             for action in parsed.get("actions", []):
                 tool_name = action.get("tool")
@@ -199,33 +207,13 @@ class NovaBrain:
                 if tool_name:
                     result = self.tools.execute(tool_name, **params)
                     results[tool_name] = result.to_dict()
-            if parsed.get("intent") == "status":
-                results.update(await self._status_response())
-            if not results:
-                results["llm_response"] = {"success": False, "output": "No matching capability found."}
-                return results
-        else:
-            ok, answer = await loop.run_in_executor(None, lambda: self.llm.generate(
-                query,
-                system=self._system_prompt,
-            ))
-            results["llm_response"] = {"success": ok, "output": answer}
             return results
 
-        state_summary = json.dumps({
-            "lessons": [l.get("obstacle", "")[:100] for l in lessons[:3]],
-            "system_state": system_state,
-            "tools_run": selected,
-            "results": {k: v.get("output", {}) for k, v in results.items()},
-        }, default=str)[:1500]
-
-        loop = asyncio.get_event_loop()
-        ok, reasoning = await loop.run_in_executor(
-            None,
-            lambda: self.llm.reason(state_summary, query),
-        )
-        results["_reasoning"] = {"success": ok, "output": reasoning}
-
+        ok, answer = await loop.run_in_executor(None, lambda: self.llm.generate(
+            query,
+            system=self._system_prompt,
+        ))
+        results["llm_response"] = {"success": ok, "output": answer}
         return results
 
     async def _status_response(self) -> dict:
@@ -324,7 +312,7 @@ class NovaBrain:
                 actions.append({"tool": tool_name, "params": params})
 
         if not actions:
-            if any(w in query_lower for w in ["status", "overview", "dashboard", "summary"]):
+            if any(w in query_lower for w in ["status", "overview", "dashboard", "summary", "statistics", "stats", "system state"]):
                 return {"intent": "status", "actions": []}
             elif any(w in query_lower for w in ["help", "what can you do", "capabilities"]):
                 return {"intent": "help", "actions": []}

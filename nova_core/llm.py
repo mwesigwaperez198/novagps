@@ -184,8 +184,14 @@ class NovaLLM:
             logger.error("Ollama chat failed: %s", e)
             return False, str(e)
 
-    def generate(self, prompt: str, stream: bool = False, system: str = "") -> Tuple[bool, str]:
-        return self.chat(system=system, prompt=prompt)
+    def generate(
+        self,
+        prompt: str,
+        stream: bool = False,
+        system: str = "",
+        num_predict: int = 600,
+    ) -> Tuple[bool, str]:
+        return self.chat(system=system, prompt=prompt, num_predict=num_predict)
 
     def select_tool(self, query: str, tool_descriptions: list) -> list:
         """Ask the LLM which tools to use for a query.
