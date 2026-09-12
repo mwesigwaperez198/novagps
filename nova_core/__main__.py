@@ -575,6 +575,15 @@ async def cmd_chat():
 
         print(_tui(f"  LAU ▸ {_wrap(out.get('response', ''), 2)}", "green", "bold"))
 
+        tools = out.get("tools_executed") or []
+        if tools:
+            print()
+            print(_tui(f"  ⚙ RUN: {' → '.join(tools)}", "magenta", "bold"))
+            for tool_name, result in (out.get("results") or {}).items():
+                if tool_name == "_reasoning":
+                    continue
+                print(_tool_brief(result, tool_name))
+
         if show_thoughts:
             if steps:
                 print(_tui("  ◈ thinking…", "cyan", "bold"))
@@ -586,14 +595,6 @@ async def cmd_chat():
                 meta.append(f"device={device_id}")
             if meta:
                 print(_tui(f"  {' | '.join(m for m in meta if m)}", "grey"))
-
-            tools = out.get("tools_executed") or []
-            if tools:
-                print(_tui(f"  → ran: {', '.join(tools)}", "cyan", "dim"))
-            for tool_name, result in (out.get("results") or {}).items():
-                if tool_name == "_reasoning":
-                    continue
-                print(_tool_brief(result, tool_name))
 
         action = out.get("action")
         if action:

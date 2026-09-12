@@ -284,6 +284,13 @@ class NovaBrain:
             "bandwidth": "bandwidth_test",
             "payload": "payload_gen",
             "generate payload": "payload_gen",
+            "analyse threats": "threat_scan",
+            "analyze threats": "threat_scan",
+            "threat analysis": "threat_scan",
+            "threat scan": "threat_scan",
+            "scan for threats": "threat_scan",
+            "attacks from": "threat_scan",
+            "attack surface": "threat_scan",
         }
 
         for phrase, tool_name in tool_mappings.items():
@@ -308,6 +315,21 @@ class NovaBrain:
                     params["category"] = "sqli" if "sqli" in query_lower else \
                                          "xss" if "xss" in query_lower else \
                                          "cmdi" if "cmd" in query_lower else "sqli"
+                if tool_name == "threat_scan":
+                    import re as _re
+                    url_match = _re.search(r"https?://[^\s]+", query_lower)
+                    base_url = url_match.group(0).rstrip("/") if url_match else ""
+                    host_port = _re.sub(r"^https?://", "", base_url).split("/")[0] if base_url else ""
+                    host = host_port.split(":")[0] if host_port else "127.0.0.1"
+                    port = int(host_port.split(":")[1]) if ":" in host_port else None
+                    base_url = base_url or "http://127.0.0.1:8000"
+                    if port is None:
+                        port = 443 if base_url.startswith("https") else 80
+                    actions.append({"tool": "vuln_scan", "params": {"base_url": base_url}})
+                    actions.append({"tool": "dns_resolve", "params": {"domain": host}})
+                    actions.append({"tool": "connectivity_probe", "params": {"host": host, "port": port}})
+                    actions.append({"tool": "port_scan", "params": {"host": host, "ports": "1-1024"}})
+                    continue
 
                 actions.append({"tool": tool_name, "params": params})
 
