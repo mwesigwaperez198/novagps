@@ -20,7 +20,7 @@ RUN apt-get update \
 # All AVX/FMA/F16C flags must be explicitly disabled — llama's cmake
 # auto-detects the build host CPU (AVX2 capable) and the resulting .so
 # then crashes with SIGILL on Render's VM which lacks those instructions.
-# Cache-bust token: v3
+# Cache-bust token: v4
 ENV CMAKE_ARGS="-DLLAMA_METAL=OFF -DLLAMA_BLAS=OFF -DLLAMA_AVX=OFF -DLLAMA_AVX2=OFF -DLLAMA_AVX512=OFF -DLLAMA_FMA=OFF -DLLAMA_F16C=OFF" \
     CFLAGS="-O2 -march=x86-64 -mno-avx -mno-avx2 -mno-sse4.1 -mno-sse4.2" \
     CXXFLAGS="-O2 -march=x86-64 -mno-avx -mno-avx2 -mno-sse4.1 -mno-sse4.2"

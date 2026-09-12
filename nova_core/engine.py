@@ -178,15 +178,30 @@ class NovaCognitiveEngine:
                 return False
 
     def _probe_llama_cpp(self) -> bool:
-        """Run a subprocess that just imports llama_cpp. Returns True if safe."""
+        """Probe llama_cpp in a subprocess — tests both import AND Llama() init.
+        SIGILL during Llama() kills the subprocess, not uvicorn. Returns True only
+        if the subprocess exits 0 (file-not-found is fine; AVX crash is not)."""
         import subprocess, sys
+        probe = (
+            "from llama_cpp import Llama; "
+            "Llama(model_path='/tmp/__nova_probe_nonexistent__.gguf', n_ctx=8, verbose=False)"
+        )
         try:
             result = subprocess.run(
-                [sys.executable, "-c", "from llama_cpp import Llama; print('ok')"],
-                timeout=15,
+                [sys.executable, "-c", probe],
+                timeout=20,
                 capture_output=True,
             )
-            return result.returncode == 0
+            # returncode 0 = success (shouldn't happen — file doesn't exist)
+            # returncode 1 = Python exception (file not found) = .so is safe
+            # returncode -4 / 132 = SIGILL = AVX crash = unsafe
+            safe = result.returncode in (0, 1)
+            if not safe:
+                logger.warning(
+                    "llama_cpp probe exited %d (likely SIGILL) — shield engaged.",
+                    result.returncode,
+                )
+            return safe
         except Exception as e:
             logger.warning("llama_cpp probe exception: %s", e)
             return False
