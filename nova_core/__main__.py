@@ -29,7 +29,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
     handlers=[
-        logging.StreamHandler(),
+        logging.StreamHandler(sys.stderr),
     ],
 )
 logger = logging.getLogger("nova_core")
@@ -42,6 +42,14 @@ def setup_file_logging():
     file_handler = logging.FileHandler(str(log_file))
     file_handler.setFormatter(logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s"))
     logging.getLogger().addHandler(file_handler)
+
+
+def _silence_tui_loggers():
+    """During chat mode push noisy background loggers to WARNING so they
+    don't bleed into the TUI. Logs still go to the file handler."""
+    for name in ("nova_core.engine", "nova_core.llm", "nova_core.watcher",
+                 "nova_core.tools", "httpx", "httpcore"):
+        logging.getLogger(name).setLevel(logging.WARNING)
 
 
 async def cmd_interactive():
@@ -386,9 +394,6 @@ def _render_thought(thought_process, indent: int = 2) -> None:
         print(f"{pad}{_tui(f'{i:>2}.', 'cyan')} {_wrap(str(step), indent + 5)}")
 
 
-_DEBUG_MONOLOGUE = "/tmp/lau_internal_monologue.log"
-
-
 def _log_internal_monologue(intent: str, thought_process, engine: str, command: str) -> None:
     """Hide the reasoning exchange behind a local debug channel.
 
@@ -416,8 +421,8 @@ def _log_internal_monologue(intent: str, thought_process, engine: str, command: 
         log_file.parent.mkdir(parents=True, exist_ok=True)
         with open(log_file, "a") as f:
             f.write(json.dumps(payload) + "\n")
-    except Exception:
-        pass
+    except OSError as e:
+        logger.debug("monologue write skipped: %s", e)
 
 
 async def cmd_chat():
@@ -433,6 +438,7 @@ async def cmd_chat():
     from .shield import NovaDeterministicShield
     from .tools import get_registry
 
+    _silence_tui_loggers()
     cfg = get_config()
     brain = NovaBrain()
     routes_mod._brain_instance = brain
@@ -489,7 +495,8 @@ async def cmd_chat():
             continue
 
         if cmd == "/clear":
-            os.system("clear" if os.name != "nt" else "cls")
+            import subprocess
+            subprocess.run(["clear"] if os.name != "nt" else ["cls"], check=False)
             continue
 
         if cmd.startswith("/device"):
@@ -615,8 +622,13 @@ async def cmd_chat():
             print(_tui("  ┌─ EXECUTABLE ACTION ─────────────────────────────", "magenta"))
             print(_tui(f"  │ {action.get('method', 'GET')} {action['endpoint']}", "magenta"))
             print(_tui("  └──────────────────────────────────────────────────", "magenta"))
-            yn = input(_tui("  execute against backend? [y/N] ", "cyan", "bold") if color else "  execute? [y/N] ").strip().lower()
-            if yn in ("y", "yes"):
+            if action.get("requires_typed_confirmation"):
+                yn = input(_tui("  destructive operation — type WIPE to authorize: ", "red", "bold") if color else "  type WIPE to authorize: ").strip()
+                approved = yn == "WIPE"
+            else:
+                yn = input(_tui("  execute against backend? [y/N] ", "cyan", "bold") if color else "  execute? [y/N] ").strip().lower()
+                approved = yn in ("y", "yes")
+            if approved:
                 endpoint = action["endpoint"]
                 method = action.get("method", "POST")
                 if action.get("extract_body"):
@@ -631,9 +643,25 @@ async def cmd_chat():
                     resp = httpx.request(method, url, timeout=30, headers=headers)
                     try:
                         payload = resp.json()
-                    except Exception:
+                    except ValueError:
                         payload = resp.text[:400]
                     print(_tui(f"  ← {resp.status_code} {_wrap(str(payload)[:500], 2)}", "green" if resp.status_code < 400 else "red"))
+                    # Mirror the web HUD: a terminal-approved action becomes a
+                    # durable lesson, including failures returned by the API.
+                    try:
+                        httpx.post(
+                            cfg.backend_url.rstrip("/") + "/nova-core/actions/outcome",
+                            headers=headers,
+                            timeout=8,
+                            json={
+                                "method": method,
+                                "endpoint": action["endpoint"],
+                                "success": resp.status_code < 400,
+                                "detail": str(payload)[:500],
+                            },
+                        )
+                    except (httpx.HTTPError, OSError) as e:
+                        logger.debug("outcome lesson skipped: %s", e)
                 except Exception as exc:
                     print(_tui(f"  ✗ backend unreachable: {exc} — start the API or set NOVA_BACKEND_URL", "red"))
             else:

@@ -6,17 +6,28 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
+def _default_backend_dir() -> Path:
+    root = Path(os.environ.get("NOVA_PROJECT_ROOT", "/app"))
+    nested = root / "backend"
+    # Render's production image flattens backend/ into /app, while source and
+    # portable layouts retain backend/.  Support both without stale settings.
+    return nested if nested.exists() else root
+
+
 @dataclass
 class NovaCoreConfig:
     agent_name: str = field(default_factory=lambda: os.environ.get("NOVA_AGENT_NAME", "LAU"))
-    base_dir: Path = field(default_factory=lambda: Path(os.environ.get("NOVA_DATA_DIR", "/var/data")))
-    vault_dir: Path = field(default_factory=lambda: Path(os.environ.get("NOVA_VAULT_DIR", "/var/data/nova_vault")))
+    # DATA_DIR is the platform-wide storage contract.  Older launchers only set
+    # DATA_DIR, so derive every LAU path from it unless an explicit NOVA_* value
+    # is supplied.  This keeps local, portable, and hosted memory in one place.
+    base_dir: Path = field(default_factory=lambda: Path(os.environ.get("NOVA_DATA_DIR") or os.environ.get("DATA_DIR") or "data"))
+    vault_dir: Path = field(default_factory=lambda: Path(os.environ.get("NOVA_VAULT_DIR") or os.environ.get("NOVA_DATA_DIR") or os.environ.get("DATA_DIR") or "data") / "nova_vault")
     project_root: Path = field(default_factory=lambda: Path(os.environ.get("NOVA_PROJECT_ROOT", "/app")))
-    backend_dir: Path = field(default_factory=lambda: Path(os.environ.get("NOVA_BACKEND_DIR", "/app/backend")))
-    log_file: Path = field(default_factory=lambda: Path(os.environ.get("NOVA_LOG_FILE", "/var/data/nova_vault/agent.log")))
-    memory_db: Path = field(default_factory=lambda: Path(os.environ.get("NOVA_MEMORY_DB", "/var/data/nova_vault/local_memory.db")))
-    escrow_bin: Path = field(default_factory=lambda: Path(os.environ.get("NOVA_ESCROW_BIN", "/var/data/nova_vault/secure_escrow.bin")))
-    alert_file: Path = field(default_factory=lambda: Path(os.environ.get("NOVA_ALERT_FILE", "/var/data/nova_vault/alerts.json")))
+    backend_dir: Path = field(default_factory=lambda: Path(os.environ["NOVA_BACKEND_DIR"]) if os.environ.get("NOVA_BACKEND_DIR") else _default_backend_dir())
+    log_file: Path = field(default_factory=lambda: Path(os.environ.get("NOVA_LOG_FILE") or (Path(os.environ.get("NOVA_VAULT_DIR") or os.environ.get("NOVA_DATA_DIR") or os.environ.get("DATA_DIR") or "data") / "nova_vault/agent.log")))
+    memory_db: Path = field(default_factory=lambda: Path(os.environ.get("NOVA_MEMORY_DB") or (Path(os.environ.get("NOVA_VAULT_DIR") or os.environ.get("NOVA_DATA_DIR") or os.environ.get("DATA_DIR") or "data") / "nova_vault/local_memory.db")))
+    escrow_bin: Path = field(default_factory=lambda: Path(os.environ.get("NOVA_ESCROW_BIN") or (Path(os.environ.get("NOVA_VAULT_DIR") or os.environ.get("NOVA_DATA_DIR") or os.environ.get("DATA_DIR") or "data") / "nova_vault/secure_escrow.bin")))
+    alert_file: Path = field(default_factory=lambda: Path(os.environ.get("NOVA_ALERT_FILE") or (Path(os.environ.get("NOVA_VAULT_DIR") or os.environ.get("NOVA_DATA_DIR") or os.environ.get("DATA_DIR") or "data") / "nova_vault/alerts.json")))
     monologue_file: Path = field(default_factory=lambda: Path(os.environ.get("NOVA_MONOLOGUE_FILE", "/tmp/lau_internal_monologue.log")))
 
     backend_url: str = field(default_factory=lambda: os.environ.get("NOVA_BACKEND_URL", "http://127.0.0.1:8000"))
@@ -38,11 +49,11 @@ class NovaCoreConfig:
     llm_backend: str = field(default_factory=lambda: os.environ.get("NOVA_LLM_BACKEND", "embedded"))
     llm_model_override: str = field(default_factory=lambda: os.environ.get("NOVA_MODEL", ""))
 
-    embedded_enabled: bool = field(default_factory=lambda: os.environ.get("NOVA_EMBEDDED", "1") == "1")
-    embedded_max_ctx: int = field(default_factory=lambda: int(os.environ.get("NOVA_EMBEDDED_CTX", "2048")))
-    embedded_max_tokens: int = field(default_factory=lambda: int(os.environ.get("NOVA_EMBEDDED_TOKENS", "256")))
+    embedded_enabled: bool = field(default_factory=lambda: os.environ.get("NOVA_EMBEDDED", "0") == "1")
+    embedded_max_ctx: int = field(default_factory=lambda: int(os.environ.get("NOVA_EMBEDDED_CTX", "512")))
+    embedded_max_tokens: int = field(default_factory=lambda: int(os.environ.get("NOVA_EMBEDDED_TOKENS", "128")))
     embedded_threads: int = field(default_factory=lambda: int(os.environ.get("NOVA_EMBEDDED_THREADS", "1")))
-    mem_reserve_mb: int = field(default_factory=lambda: int(os.environ.get("NOVA_MEM_RESERVE_MB", "512")))
+    mem_reserve_mb: int = field(default_factory=lambda: int(os.environ.get("NOVA_MEM_RESERVE_MB", "128")))
 
     def ensure_dirs(self):
         self.vault_dir.mkdir(parents=True, exist_ok=True)
