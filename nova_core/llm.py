@@ -79,9 +79,18 @@ class NovaLLM:
 
     def _pick_best_model(self, installed: list) -> str:
         """Choose the most capable installed model when the configured one is
-        missing — prefers larger, newer models, else first installed."""
+        missing. Prefers models in the same family as the configured model
+        (e.g. config llama3.2:3b → installed llama3.2:*), then a curated
+        preference list, then the first installed model."""
         if not installed:
             return ""
+        configured_family = self.model.split(":")[0].lower()
+        family_hits = [
+            m for m in installed
+            if m.lower().split(":")[0] == configured_family
+        ]
+        if family_hits:
+            return self._pick_largest_in_family(family_hits)
         preference = [
             "llama3.1:8b", "llama3:8b", "llama3", "llama3.2", "qwen2.5:7b",
             "qwen3:8b", "mistral", "gemma3", "phi4", "deepseek-r1",
@@ -91,6 +100,16 @@ class NovaLLM:
                 if pref in m:
                     return m
         return installed[0]
+
+    @staticmethod
+    def _pick_largest_in_family(family_hits: list) -> str:
+        """Within a family, prefer the largest parameter count the machine "
+        actually has, so a configured 3B family picks a 3B, not an 8B."""
+        def size_key(model: str) -> int:
+            tag = model.split(":")[-1].lower()
+            digits = "".join(ch for ch in tag if ch.isdigit())
+            return int(digits) if digits else 0
+        return max(family_hits, key=size_key)
 
     def is_available(self) -> bool:
         return self.check_availability().get("available", False)

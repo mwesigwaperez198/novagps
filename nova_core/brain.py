@@ -335,7 +335,15 @@ class NovaBrain:
             if llm_resp.get("success"):
                 parts.append(str(llm_resp.get("output", "")).strip())
             else:
-                parts.append(f"LLM error: {llm_resp.get('error')}")
+                # Reasoning engine failed (offline, timeout, overloaded machine).
+                # Don't leak the raw error to the operator — answer as herself
+                # and honestly note the fallback.
+                logger.warning("LLM failed (%s); falling back to persona response", llm_resp.get("error"))
+                parts.append(
+                    self.compose_dynamic_response(query)
+                    + "\n(My reasoning engine is struggling to spin up — I answered from my "
+                      "grounded core so you're never left hanging. Try again in a moment.)"
+                )
 
         if "_reasoning" in results:
             only_reasoning = len(results) == 1
