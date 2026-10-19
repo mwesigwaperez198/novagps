@@ -37,6 +37,16 @@ services:
         value: "0"
       - key: NOVA_LLM_BACKEND
         value: shield
+      # Real reasoning: set NOVA_LLM_API_KEY (Render dashboard, secret) and LAU
+      # switches from keyword matching to a hosted model automatically. Leave it
+      # unset to stay on the deterministic shield. Defaults target Groq; override
+      # NOVA_LLM_BASE_URL/NOVA_LLM_MODEL for OpenRouter/OpenAI or another model.
+      - key: NOVA_LLM_API_KEY
+        sync: false
+      - key: NOVA_LLM_BASE_URL
+        value: https://api.groq.com/openai/v1
+      - key: NOVA_LLM_MODEL
+        value: llama-3.3-70b-versatile
       - key: NOVA_AGENT_NAME
         value: LAU
       - key: NOVA_EMBEDDED_CTX

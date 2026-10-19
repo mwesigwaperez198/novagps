@@ -29,6 +29,61 @@ class NovaLLM:
         self._availability_ttl = 20.0
         self.timeout = int(os.environ.get("OLLAMA_TIMEOUT", "180"))
 
+        # Hosted, OpenAI-compatible providers (Groq / OpenRouter / OpenAI / ...).
+        # A key flips LAU from keyword matching onto a real reasoning model.
+        self.api_key = cfg.llm_api_key or os.environ.get("NOVA_LLM_API_KEY", "")
+        self.base_url = (cfg.llm_base_url or "").rstrip("/")
+        self.hosted_model = cfg.llm_model or self.model
+        self.llm_timeout = cfg.llm_timeout
+        self.provider = "hosted" if (self.api_key or cfg.llm_backend.lower()
+                                     in ("groq", "openai", "openrouter", "hosted", "api")) else "ollama"
+
+    def is_hosted(self) -> bool:
+        return self.provider == "hosted"
+
+    def _hosted_headers(self) -> dict:
+        return {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+        }
+
+    def _check_hosted(self) -> dict:
+        if not self.api_key:
+            self._available = False
+            self._checked_at = time.time()
+            return {
+                "available": False,
+                "provider": "hosted",
+                "model": self.hosted_model,
+                "error": "NOVA_LLM_API_KEY not set",
+            }
+        try:
+            start = time.time()
+            req = urllib.request.Request(
+                f"{self.base_url}/models",
+                headers=self._hosted_headers(),
+                method="GET",
+            )
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = json.loads(resp.read())
+            self._latency_ms = (time.time() - start) * 1000
+            self._checked_at = time.time()
+            self._available = True
+            models = [m.get("id", "") for m in data.get("data", [])]
+            return {
+                "available": True,
+                "provider": "hosted",
+                "base_url": self.base_url,
+                "model": self.hosted_model,
+                "latency_ms": round(self._latency_ms, 2),
+                "models_available": len(models),
+            }
+        except Exception as e:
+            self._available = False
+            self._checked_at = time.time()
+            logger.info("Hosted LLM not reachable at %s: %s", self.base_url, e)
+            return {"available": False, "provider": "hosted", "base_url": self.base_url, "error": str(e)}
+
     def check_availability(self) -> dict:
         if self._available is not None and time.time() - self._checked_at < self._availability_ttl:
             return {
@@ -37,6 +92,9 @@ class NovaLLM:
                 "model": self.model,
                 "latency_ms": self._latency_ms,
             }
+
+        if self.is_hosted():
+            return self._check_hosted()
 
         try:
             start = time.time()
@@ -149,6 +207,9 @@ class NovaLLM:
             messages.append(h)
         messages.append({"role": "user", "content": prompt})
 
+        if self.is_hosted():
+            return self._hosted_chat(messages, temperature, num_predict, timeout)
+
         payload = {
             "model": self.model,
             "messages": messages,
@@ -182,6 +243,44 @@ class NovaLLM:
             return False, f"Ollama error {e.code}: {body[:200]}"
         except Exception as e:
             logger.error("Ollama chat failed: %s", e)
+            return False, str(e)
+
+    def _hosted_chat(self, messages: list, temperature: float,
+                     num_predict: int, timeout: int) -> Tuple[bool, str]:
+        if not self.api_key:
+            return False, "NOVA_LLM_API_KEY not set"
+        payload = {
+            "model": self.hosted_model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": num_predict,
+            "stream": False,
+        }
+        req = urllib.request.Request(
+            f"{self.base_url}/chat/completions",
+            data=json.dumps(payload).encode(),
+            headers=self._hosted_headers(),
+            method="POST",
+        )
+        try:
+            start = time.time()
+            with urllib.request.urlopen(req, timeout=timeout or self.llm_timeout) as resp:
+                data = json.loads(resp.read())
+            self._latency_ms = (time.time() - start) * 1000
+            choices = data.get("choices") or []
+            if choices:
+                return True, choices[0].get("message", {}).get("content", "")
+            return False, "Hosted LLM returned no choices"
+        except urllib.error.HTTPError as e:
+            body = ""
+            try:
+                body = e.read().decode()
+            except Exception:
+                pass
+            logger.error("Hosted LLM HTTP %s: %s", e.code, body[:300])
+            return False, f"LLM error {e.code}: {body[:200]}"
+        except Exception as e:
+            logger.error("Hosted LLM chat failed: %s", e)
             return False, str(e)
 
     def generate(

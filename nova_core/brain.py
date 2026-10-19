@@ -239,9 +239,16 @@ class NovaBrain:
 
     @property
     def engine_used(self) -> str:
-        return self.engine.engine_used if self.engine.engine_used != "UNINITIALIZED" else (
-            "DETERMINISTIC_SHIELD" if self.engine.state == "shield_only" else "UNINITIALIZED"
-        )
+        if self.engine.engine_used != "UNINITIALIZED":
+            return self.engine.engine_used
+        try:
+            if self.llm.is_hosted() and self.llm.is_available():
+                return f"HOSTED:{self.llm.hosted_model}"
+            if self.llm.is_available():
+                return "OLLAMA"
+        except Exception:
+            pass
+        return "DETERMINISTIC_SHIELD" if self.engine.state == "shield_only" else "UNINITIALIZED"
 
     def _load_system_prompt(self) -> str:
         prompt_path = Path(__file__).parent / "prompts" / "system_prompt.md"
@@ -265,6 +272,8 @@ class NovaBrain:
 
         if self.llm_available:
             results = await self._process_with_engine(query, recent_lessons, system_state)
+        elif self.llm.is_hosted() and self.llm.is_available():
+            results = await self._process_with_hosted_llm(query, recent_lessons, system_state)
         elif self.llm.is_available():
             results = await self._process_with_ollama(query, recent_lessons, system_state)
         else:
@@ -408,6 +417,66 @@ class NovaBrain:
         ok, answer = await loop.run_in_executor(None, lambda: self.llm.generate(
             query,
             system=self._system_prompt,
+        ))
+        results["llm_response"] = {"success": ok, "output": answer}
+        return results
+
+    async def _process_with_hosted_llm(self, query: str, lessons: list, system_state: dict) -> dict:
+        """Real reasoning path: the model chooses tools, we run them, then it answers.
+
+        The rule parser still supplies concrete parameters (an IP, a port range)
+        so a model decision never loses the operator's target.
+        """
+        loop = asyncio.get_event_loop()
+        parsed = self._parse_request(query)
+        results: dict = {}
+
+        if parsed.get("intent") == "status":
+            results.update(await self._status_response())
+            return results
+        if parsed.get("intent") == "help":
+            results["help"] = {"text": self._help_text()}
+            return results
+
+        params_by_tool = {
+            a["tool"]: a.get("params", {})
+            for a in parsed.get("actions", []) if a.get("tool")
+        }
+        rule_tools = list(params_by_tool.keys())
+
+        tool_desc = self.tools.list_tools()
+        chosen = await loop.run_in_executor(
+            None, lambda: self.llm.select_tool(query, tool_desc)
+        )
+        # Merge: keep the model's choices, but never drop a target the rules caught.
+        ordered: list = []
+        for name in (chosen or []) + rule_tools:
+            if name and name not in ordered:
+                ordered.append(name)
+
+        for name in ordered:
+            result = await loop.run_in_executor(
+                None, lambda n=name: self.tools.execute(n, **params_by_tool.get(n, {}))
+            )
+            if result:
+                results[name] = result.to_dict()
+
+        tool_summary = json.dumps(
+            {k: (v.get("output", {}) if isinstance(v, dict) else v) for k, v in results.items()},
+            default=str,
+        )[:1800]
+        ok, answer = await loop.run_in_executor(None, lambda: self.llm.chat(
+            system=self._system_prompt,
+            prompt=(
+                f"The operator asked: {query}\n\n"
+                f"Tools ran: {ordered or 'none'}\n"
+                f"Tool results (JSON):\n{tool_summary}\n\n"
+                "Answer the operator directly in plain language. Be concrete about what "
+                "you found, and be honest when something is unreachable or unknown. "
+                "Do not invent results that are not in the tool output."
+            ),
+            temperature=0.3,
+            num_predict=900,
         ))
         results["llm_response"] = {"success": ok, "output": answer}
         return results

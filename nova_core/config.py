@@ -69,6 +69,18 @@ class NovaCoreConfig:
     llm_backend: str = field(default_factory=lambda: os.environ.get("NOVA_LLM_BACKEND", "embedded"))
     llm_model_override: str = field(default_factory=lambda: os.environ.get("NOVA_MODEL", ""))
 
+    # OpenAI-compatible hosted reasoning (Groq, OpenRouter, OpenAI, together...).
+    # One key is enough to give LAU a real reasoning model; when it is absent the
+    # deterministic shield remains the fallback so the app never hard-fails.
+    llm_api_key: str = field(default_factory=lambda: os.environ.get("NOVA_LLM_API_KEY", ""))
+    llm_base_url: str = field(
+        default_factory=lambda: os.environ.get("NOVA_LLM_BASE_URL", "https://api.groq.com/openai/v1")
+    )
+    llm_model: str = field(
+        default_factory=lambda: os.environ.get("NOVA_LLM_MODEL", "llama-3.3-70b-versatile")
+    )
+    llm_timeout: int = field(default_factory=lambda: int(os.environ.get("NOVA_LLM_TIMEOUT", "60")))
+
     embedded_enabled: bool = field(default_factory=lambda: os.environ.get("NOVA_EMBEDDED", "0") == "1")
     embedded_max_ctx: int = field(default_factory=lambda: int(os.environ.get("NOVA_EMBEDDED_CTX", "512")))
     embedded_max_tokens: int = field(default_factory=lambda: int(os.environ.get("NOVA_EMBEDDED_TOKENS", "128")))
