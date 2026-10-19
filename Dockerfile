@@ -75,9 +75,17 @@ RUN mkdir -p /tmp/skills \
     rm -rf /tmp/skills
 
 # Nikto is packaged in Debian non-free, which the slim image does not enable,
-# so install the upstream tree and expose its Perl entrypoint instead.
+# so install the upstream tree and expose its Perl entrypoint instead. The
+# module set below is the one nikto refuses to start without (XML::Writer is
+# not part of core Perl); the version probe keeps the detection honest.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libxml-writer-perl libnet-ssleay-perl libio-socket-ssl-perl libwww-perl \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN git clone --depth 1 https://github.com/sullo/nikto.git /opt/nikto \
     && chmod +x /opt/nikto/program/nikto.pl \
+    && /opt/nikto/program/nikto.pl -Version >/dev/null 2>&1 \
     && ln -sfn /opt/nikto/program/nikto.pl /usr/local/bin/nikto \
     || echo "[nova] nikto unavailable"
 
