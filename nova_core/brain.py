@@ -25,6 +25,14 @@ from .system_context import SystemContext
 
 logger = logging.getLogger("nova_core.brain")
 
+_IP_RE = re.compile(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b")
+_URL_HOST_RE = re.compile(r"https?://([^\s/]+)")
+_HOST_INTENT_WORDS = (
+    "which device", "what device", "whose", "identify", "who is",
+    "router id", "device is", "device on", "device at", "belongs to",
+    "what is that ip", "what's that ip", "which host", "located at",
+)
+
 
 def format_network_discovery(o: dict, indent: int = 0) -> str:
     """Render a LAN discovery result as a readable neighboring-hosts panel."""
@@ -417,6 +425,22 @@ class NovaBrain:
         }
         return results
 
+    def _extract_host(self, query: str) -> str:
+        """Pull a target host out of a request: explicit URL first, then IPv4.
+
+        Only trustworthy tokens qualify — a bare word after "on"/"at" could be
+        anything, so we require a dotted quad or a URL to name a target.
+        """
+        url = _URL_HOST_RE.search(query)
+        if url:
+            return url.group(1).strip()
+        ip = _IP_RE.search(query)
+        if ip:
+            octets = ip.group(1).split(".")
+            if all(0 <= int(o) <= 255 for o in octets):
+                return ip.group(1)
+        return ""
+
     def _parse_request(self, query: str) -> dict:
         query_lower = query.lower()
         actions = []
@@ -424,6 +448,10 @@ class NovaBrain:
         skill_actions = self._parse_skill_intent(query, query_lower)
         if skill_actions is not None:
             return {"intent": "execute", "actions": skill_actions}
+
+        host = self._extract_host(query)
+        if host and any(w in query_lower for w in _HOST_INTENT_WORDS):
+            actions.append({"tool": "host_identify", "params": {"target": host}})
 
         tool_mappings = {
             "port scan": "port_scan",
@@ -626,11 +654,16 @@ class NovaBrain:
 
     def _dispatch_action(self, tool_name: str, query: str, query_lower: str) -> dict | list | None:
         params = {}
+        host = self._extract_host(query)
         if tool_name == "port_scan":
             import re
             port_match = re.search(r"ports?\s+(\d+[\-\d,]*)", query_lower)
             if port_match:
                 params["ports"] = port_match.group(1)
+            if host:
+                params["host"] = host
+        if tool_name in ("connectivity_probe", "traceroute", "mtu_test", "bandwidth_test") and host:
+            params["host"] = host
         if tool_name == "dns_resolve":
             import re
             domain_match = re.search(r"(?:dns|resolve)\s+(\S+)", query_lower)
@@ -698,17 +731,21 @@ class NovaBrain:
             params["interface"] = ""
         if tool_name == "device_lookup":
             import re as _re3
-            q = ""
-            imei_match = _re3.search(
+            probe_imei = _re3.search(
                 r"\bimei\b\s*(?:number\s*)?[:#]?\s*([0-9]{15,17})\b", query_lower)
-            serial_match = _re3.search(
+            probe_serial = _re3.search(
                 r"\b(?:serial\s*(?:number\s*)?|sn\b)\s*[:]?\s*([0-9a-z][0-9a-z\-]{2,})",
                 query_lower,
             )
-            if imei_match:
-                q = imei_match.group(1)
-            elif serial_match:
-                q = serial_match.group(1)
+            # An IP is not a device name. Route host-derived lookups to the
+            # host identifier instead of shipping the whole sentence to /search.
+            if host and not probe_imei and not probe_serial:
+                return {"tool": "host_identify", "params": {"target": host}}
+            q = ""
+            if probe_imei:
+                q = probe_imei.group(1)
+            elif probe_serial:
+                q = probe_serial.group(1)
             else:
                 after = _re3.split(
                     r"(?:show|give me|fetch|get)\s+(?:me\s+)?(?:the\s+)?"
@@ -859,6 +896,24 @@ class NovaBrain:
                     target = candidate
 
         return [{"tool": "skill", "params": {"key": key, "target": target}}]
+
+    def _format_host_identify(self, o: dict) -> str:
+        target = o.get("target", "?")
+        lines = [f"{target} — {o.get('scope', 'unknown')} address"]
+        if o.get("reverse_dns"):
+            lines.append(f"reverse DNS: {o['reverse_dns']}")
+        for d in o.get("matched_devices") or []:
+            tag = f"{d.get('name')} ({d.get('device_type') or 'device'}"
+            if d.get("imei"):
+                tag += f", IMEI {d['imei']}"
+            if d.get("carrier"):
+                tag += f", {d['carrier']}"
+            lines.append(f"registered device: {tag})")
+        if o.get("message"):
+            lines.append(o["message"])
+        for note in (o.get("analysis") or [])[:3]:
+            lines.append(f"· {note}")
+        return "\n".join(lines)
 
     def _format_skill(self, o: dict) -> str:
         name = o.get("name") or o.get("skill") or "skill"
@@ -1225,6 +1280,7 @@ class NovaBrain:
             "payload_gen": lambda o: f"Generated {o.get('count', 0)} {o.get('category', '')} payloads",
             "packet_capture": lambda o: format_packet_capture(o, 0),
             "device_lookup": lambda o: format_device_lookup(o, 0),
+            "host_identify": lambda o: self._format_host_identify(o),
             "network_discovery": lambda o: format_network_discovery(o, 0),
             "radio_sniffer": lambda o: format_radio_sniffer(o, 0),
             "location_engine": lambda o: format_location_engine(o, 0),

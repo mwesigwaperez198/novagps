@@ -185,6 +185,100 @@ class DeviceLookup(Tool):
             return ToolResult(success=False, output=None, error=str(e))
 
 
+class HostIdentifier(Tool):
+    name = "host_identify"
+    description = (
+        "Identify what a given IP or host belongs to: match it against the device "
+        "registry (public + local IP) and, for public addresses, reverse-resolve it. "
+        "Explains reachability honestly for private LAN addresses."
+    )
+    category = "backend"
+
+    def execute(self, target: str = "", **kwargs) -> ToolResult:
+        import ipaddress
+        import socket
+        import httpx
+        cfg = get_config()
+
+        target = (target or "").strip()
+        if not target:
+            return ToolResult(success=False, output=None, error="No IP/host given")
+
+        try:
+            ip = ipaddress.ip_address(target)
+            scope = "private" if ip.is_private else "public"
+        except ValueError:
+            ip = None
+            scope = "hostname"
+
+        out: dict = {
+            "target": target,
+            "scope": scope,
+            "matched_devices": [],
+            "reverse_dns": None,
+            "analysis": [],
+        }
+
+        if ip is not None and scope == "public":
+            try:
+                host, _, _ = socket.gethostbyaddr(str(ip))
+                out["reverse_dns"] = host
+            except Exception:
+                pass
+
+        try:
+            resp = httpx.get(
+                f"{cfg.backend_url}/devices",
+                headers=_auth_headers(),
+                timeout=8,
+            )
+            if resp.status_code == 200:
+                devices = resp.json() if isinstance(resp.json(), list) else []
+                for d in devices:
+                    if target in {d.get("ip_address"), d.get("local_ip")}:
+                        out["matched_devices"].append(device_brief(d))
+        except httpx.RequestError as exc:
+            out["analysis"].append(
+                f"Device registry unreachable at {cfg.backend_url} ({type(exc).__name__})."
+            )
+
+        if out["matched_devices"]:
+            names = ", ".join(
+                f"{d['name']} ({d.get('device_type') or 'device'}"
+                + (f", IMEI {d['imei']}" if d.get("imei") else "")
+                + (f", {d['carrier']}" if d.get("carrier") else "")
+                + ")"
+                for d in out["matched_devices"]
+            )
+            out["message"] = f"{target} is registered as: {names}."
+            out["analysis"].append(
+                "That address is on record for this device — likely the same handset "
+                "reporting from that network."
+            )
+        elif scope == "private":
+            out["message"] = (
+                f"{target} is a private LAN address (RFC1918)."
+            )
+            out["analysis"].append(
+                "LAU runs in the cloud, so it cannot see or scan a device sitting behind "
+                "your router — that range only exists on your local network."
+            )
+            out["analysis"].append(
+                "To identify or port-scan it, run a probe on the same network: the NOVA "
+                "phone agent reports its LAN IP, or run an on-network scan from a device "
+                "on that Wi-Fi. If it is already enrolled and reporting, its local IP would "
+                "show up in the registry above."
+            )
+        elif scope == "public":
+            out["message"] = f"No registered device owns {target}."
+            if out.get("reverse_dns"):
+                out["analysis"].append(f"Reverse DNS: {out['reverse_dns']}.")
+        else:
+            out["message"] = f"'{target}' is a hostname, not an IP; resolved scope is unknown."
+
+        return ToolResult(success=True, output=out)
+
+
 def _backend_diagnosis(cfg, query: str) -> dict:
     """Probe backend health + device count, return a structured analysis."""
     result: dict = {"backend_status": "unknown", "healthy": False, "device_count": None, "analysis": []}
@@ -417,5 +511,5 @@ class EndpointTester(Tool):
 
 
 def register_backend_tools(registry: ToolRegistry):
-    for tool_cls in [BackendHealthCheck, DeviceEnumerator, DeviceLookup, AlertChecker, MetricsCollector, EndpointTester]:
+    for tool_cls in [BackendHealthCheck, DeviceEnumerator, DeviceLookup, HostIdentifier, AlertChecker, MetricsCollector, EndpointTester]:
         registry.register(tool_cls())

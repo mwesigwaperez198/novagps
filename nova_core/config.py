@@ -14,6 +14,26 @@ def _default_backend_dir() -> Path:
     return nested if nested.exists() else root
 
 
+def _default_backend_url() -> str:
+    """Where LAU's own backend tools should call.
+
+    LAU runs inside the same service that serves the API, so on a host like
+    Render the loopback default is wrong and every backend tool reports
+    "unreachable". Prefer an explicit override, then the platform's own public
+    URL, then the bound port, and only fall back to the classic dev default.
+    """
+    explicit = os.environ.get("NOVA_BACKEND_URL")
+    if explicit:
+        return explicit.rstrip("/")
+    public = os.environ.get("RENDER_EXTERNAL_URL") or os.environ.get("PUBLIC_BASE_URL")
+    if public:
+        return public.rstrip("/")
+    port = os.environ.get("PORT")
+    if port:
+        return f"http://127.0.0.1:{port}"
+    return "http://127.0.0.1:8000"
+
+
 @dataclass
 class NovaCoreConfig:
     agent_name: str = field(default_factory=lambda: os.environ.get("NOVA_AGENT_NAME", "LAU"))
@@ -30,7 +50,7 @@ class NovaCoreConfig:
     alert_file: Path = field(default_factory=lambda: Path(os.environ.get("NOVA_ALERT_FILE") or (Path(os.environ.get("NOVA_VAULT_DIR") or os.environ.get("NOVA_DATA_DIR") or os.environ.get("DATA_DIR") or "data") / "nova_vault/alerts.json")))
     monologue_file: Path = field(default_factory=lambda: Path(os.environ.get("NOVA_MONOLOGUE_FILE", "/tmp/lau_internal_monologue.log")))
 
-    backend_url: str = field(default_factory=lambda: os.environ.get("NOVA_BACKEND_URL", "http://127.0.0.1:8000"))
+    backend_url: str = field(default_factory=_default_backend_url)
     backend_token: str = field(default_factory=lambda: os.environ.get("NOVA_TOKEN", ""))
     environment: str = field(default_factory=lambda: os.environ.get("ENVIRONMENT", "development"))
     auto_enroll: bool = field(default_factory=lambda: os.environ.get("AUTO_ENROLL", "0") == "1")
