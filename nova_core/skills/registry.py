@@ -140,7 +140,7 @@ SKILLS: tuple[SkillSpec, ...] = (
         source="https://github.com/nmap/nmap",
         bins=("nmap",),
         install="apk add nmap   # or: apt-get install nmap",
-        default_args="-sV -Pn -T4",
+        default_args="-sT -sV -Pn -T4 --unprivileged",
         doc="lau skill nmap 10.0.0.5  -> service/version scan of a host.",
     ),
     SkillSpec(

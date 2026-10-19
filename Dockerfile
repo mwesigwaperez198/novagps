@@ -14,7 +14,7 @@ WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends gcc g++ make cmake libpq-dev curl ca-certificates \
         nmap whois dnsutils netcat-openbsd openssl iproute2 iputils-ping traceroute \
-        git unzip zip xz-utils whatweb yara dirb \
+        git unzip zip xz-utils whatweb yara dirb masscan perl sublist3r \
     && mkdir -p /usr/share/wordlists \
     && ln -sfn /usr/share/dirb/wordlists /usr/share/wordlists/dirb \
     && rm -rf /var/lib/apt/lists/*
@@ -73,6 +73,13 @@ RUN mkdir -p /tmp/skills \
         || echo "[nova] phoneinfoga unavailable" ; \
     /usr/local/bin/nuclei -update-templates -silent || echo "[nova] nuclei templates will download on first run" ; \
     rm -rf /tmp/skills
+
+# Nikto is packaged in Debian non-free, which the slim image does not enable,
+# so install the upstream tree and expose its Perl entrypoint instead.
+RUN git clone --depth 1 https://github.com/sullo/nikto.git /opt/nikto \
+    && chmod +x /opt/nikto/program/nikto.pl \
+    && ln -sfn /opt/nikto/program/nikto.pl /usr/local/bin/nikto \
+    || echo "[nova] nikto unavailable"
 
 # Python-based skills live in isolated pipx venvs so their pinned dependencies
 # can never collide with the API requirements. theHarvester 4.6.0 is the last
