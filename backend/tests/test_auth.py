@@ -112,3 +112,21 @@ def test_require_roles_rejects_wrong_role():
 
 def test_role_rank_ordering():
     assert ROLE_RANK["viewer"] < ROLE_RANK["auditor"] < ROLE_RANK["operator"] < ROLE_RANK["admin"]
+
+
+def test_owner_password_accepts_plural_alias(monkeypatch):
+    from config import Settings
+
+    monkeypatch.delenv("OWNER_PASSWORD", raising=False)
+    monkeypatch.setenv("OWNERS_PASSWORD", "perez123!!")
+    settings = Settings()
+    assert settings.owner_password == "perez123!!"
+
+
+def test_owner_password_prefers_canonical_name(monkeypatch):
+    from config import Settings
+
+    monkeypatch.setenv("OWNER_PASSWORD", "canonical")
+    monkeypatch.setenv("OWNERS_PASSWORD", "plural")
+    settings = Settings()
+    assert settings.owner_password == "canonical"

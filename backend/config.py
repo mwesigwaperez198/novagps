@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import List
 
-from pydantic import Field, model_validator
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -26,7 +26,12 @@ class Settings(BaseSettings):
     letsencrypt_email: str = Field("", alias="LETSENCRYPT_EMAIL")
     environment: str = Field("development", alias="ENVIRONMENT")
     dev_owner_email: str = Field("", alias="DEV_OWNER_EMAIL")
-    owner_password: str = Field("", alias="OWNER_PASSWORD")
+    # Accept the common plural spelling too: a one-character env typo
+    # (OWNERS_PASSWORD) must not silently leave production fail-closed.
+    owner_password: str = Field(
+        "",
+        validation_alias=AliasChoices("OWNER_PASSWORD", "OWNERS_PASSWORD"),
+    )
     auto_enroll: bool = Field(False, alias="AUTO_ENROLL")
     cors_origins: str = Field("http://localhost:5173,http://127.0.0.1:5173", alias="CORS_ORIGINS")
     sandbox_executor_mode: str = Field("mock", alias="SANDBOX_EXECUTOR_MODE")
