@@ -14,6 +14,9 @@ WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends gcc g++ make cmake libpq-dev curl ca-certificates \
         nmap whois dnsutils netcat-openbsd openssl iproute2 iputils-ping traceroute \
+        git unzip zip xz-utils whatweb yara dirb \
+    && mkdir -p /usr/share/wordlists \
+    && ln -sfn /usr/share/dirb/wordlists /usr/share/wordlists/dirb \
     && rm -rf /var/lib/apt/lists/*
 
 # llama-cpp-python: build with NO extended CPU instruction sets.
@@ -36,6 +39,53 @@ RUN CMAKE_ARGS="-DLLAMA_METAL=OFF -DLLAMA_BLAS=OFF -DLLAMA_AVX=OFF -DLLAMA_AVX2=
     CXXFLAGS="-O2 -march=x86-64 -mno-avx -mno-avx2 -mno-sse4.1 -mno-sse4.2" \
     pip install --no-cache-dir --force-reinstall llama-cpp-python==0.2.76 huggingface_hub==0.23.0 \
     || echo "[nova] llama-cpp-python unavailable — deterministic shield will be used"
+
+# --- LAU skill toolkit ------------------------------------------------------
+# Pinned prebuilt releases keep the image reproducible without shipping a Go
+# toolchain. Only P0-P2 recon/OSINT skills are baked in; the P3 wireless/IDS
+# tools stay out of a public container by design (they require NOVA_LAB_MODE
+# and an authorised network).
+RUN mkdir -p /tmp/skills \
+    && (curl -fsSL --retry 3 -o /tmp/skills/nuclei.zip \
+        https://github.com/projectdiscovery/nuclei/releases/download/v3.11.1/nuclei_3.11.1_linux_amd64.zip \
+        && unzip -q /tmp/skills/nuclei.zip -d /tmp/skills/nuclei \
+        && install -m 0755 /tmp/skills/nuclei/nuclei /usr/local/bin/nuclei) \
+        || echo "[nova] nuclei unavailable" ; \
+    (curl -fsSL --retry 3 -o /tmp/skills/httpx.zip \
+        https://github.com/projectdiscovery/httpx/releases/download/v1.12.0/httpx_1.12.0_linux_amd64.zip \
+        && unzip -q /tmp/skills/httpx.zip -d /tmp/skills/httpx \
+        && install -m 0755 /tmp/skills/httpx/httpx /usr/local/bin/httpx) \
+        || echo "[nova] httpx unavailable" ; \
+    (curl -fsSL --retry 3 -o /tmp/skills/ffuf.tar.gz \
+        https://github.com/ffuf/ffuf/releases/download/v2.3.0/ffuf_2.3.0_linux_amd64.tar.gz \
+        && tar -xzf /tmp/skills/ffuf.tar.gz -C /tmp/skills \
+        && install -m 0755 /tmp/skills/ffuf /usr/local/bin/ffuf) \
+        || echo "[nova] ffuf unavailable" ; \
+    (curl -fsSL --retry 3 -o /tmp/skills/trufflehog.tar.gz \
+        https://github.com/trufflesecurity/trufflehog/releases/download/v3.99.3/trufflehog_3.99.3_linux_amd64.tar.gz \
+        && tar -xzf /tmp/skills/trufflehog.tar.gz -C /tmp/skills \
+        && install -m 0755 /tmp/skills/trufflehog /usr/local/bin/trufflehog) \
+        || echo "[nova] trufflehog unavailable" ; \
+    (curl -fsSL --retry 3 -o /tmp/skills/phoneinfoga.tar.gz \
+        https://github.com/sundowndev/phoneinfoga/releases/download/v2.11.0/phoneinfoga_Linux_x86_64.tar.gz \
+        && tar -xzf /tmp/skills/phoneinfoga.tar.gz -C /tmp/skills \
+        && install -m 0755 /tmp/skills/phoneinfoga /usr/local/bin/phoneinfoga) \
+        || echo "[nova] phoneinfoga unavailable" ; \
+    /usr/local/bin/nuclei -update-templates -silent || echo "[nova] nuclei templates will download on first run" ; \
+    rm -rf /tmp/skills
+
+# Python-based skills live in isolated pipx venvs so their pinned dependencies
+# can never collide with the API requirements. theHarvester 4.6.0 is the last
+# line that still supports Python 3.12 (upstream now requires 3.14).
+ENV PIPX_HOME=/opt/pipx \
+    PIPX_BIN_DIR=/usr/local/bin
+RUN pip install --no-cache-dir pipx==1.18.4 ; \
+    pipx install sherlock-project==0.16.2 || echo "[nova] sherlock unavailable" ; \
+    pipx install maigret==0.6.6 || echo "[nova] maigret unavailable" ; \
+    pipx install sqlmap==1.10.10 || echo "[nova] sqlmap unavailable" ; \
+    pipx install mitmproxy==12.2.3 || echo "[nova] mitmproxy unavailable" ; \
+    pipx install "git+https://github.com/laramies/theHarvester.git@4.6.0" \
+        || echo "[nova] theHarvester unavailable"
 
 COPY backend/ /app/
 COPY nova_core/ /app/nova_core/

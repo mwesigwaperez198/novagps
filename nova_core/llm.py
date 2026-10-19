@@ -42,9 +42,14 @@ class NovaLLM:
         return self.provider == "hosted"
 
     def _hosted_headers(self) -> dict:
+        # Cloudflare in front of Groq rejects requests whose User-Agent looks
+        # like a bare scripting client (HTTP 403, error code 1010). Identify
+        # ourselves honestly so the API is reachable from the container.
         return {
             "Content-Type": "application/json",
+            "Accept": "application/json",
             "Authorization": f"Bearer {self.api_key}",
+            "User-Agent": "NovaGPS/1.0 (+https://novagps.onrender.com)",
         }
 
     def _check_hosted(self) -> dict:
@@ -315,7 +320,7 @@ Response:"""
             system="You are a tool selection engine. Return only valid JSON arrays.",
             prompt=prompt,
             temperature=0.0,
-            num_predict=256,
+            num_predict=512,
             timeout=self.timeout,
         )
 

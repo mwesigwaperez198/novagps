@@ -90,7 +90,7 @@ SKILLS: tuple[SkillSpec, ...] = (
         source="https://github.com/laramies/theHarvester",
         bins=("theHarvester",),
         modules=("theHarvester",),
-        install="pipx install theHarvester",
+        install="pipx install git+https://github.com/laramies/theHarvester.git@4.6.0",
         default_args="-b duckduckgo -d",
         doc="lau skill theharvester example.com  -> passive email/subdomain harvest for a domain.",
     ),

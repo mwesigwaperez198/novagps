@@ -239,11 +239,16 @@ class NovaBrain:
 
     @property
     def engine_used(self) -> str:
-        if self.engine.engine_used != "UNINITIALIZED":
-            return self.engine.engine_used
+        # A hosted model is the active reasoner even while the embedded engine
+        # reports its own shield-only state, so it wins the label.
         try:
             if self.llm.is_hosted() and self.llm.is_available():
                 return f"HOSTED:{self.llm.hosted_model}"
+        except Exception:
+            pass
+        if self.engine.engine_used != "UNINITIALIZED":
+            return self.engine.engine_used
+        try:
             if self.llm.is_available():
                 return "OLLAMA"
         except Exception:

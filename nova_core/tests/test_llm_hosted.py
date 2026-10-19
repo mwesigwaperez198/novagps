@@ -59,6 +59,16 @@ def test_backend_name_selects_hosted_without_key(monkeypatch):
     assert client.is_hosted() is True
 
 
+def test_hosted_headers_identify_the_client(monkeypatch):
+    # Groq sits behind Cloudflare, which 403s (error 1010) the default
+    # Python-urllib User-Agent. Any real identity must be sent instead.
+    client = _client(monkeypatch, llm_api_key="gsk_test")
+    headers = client._hosted_headers()
+    assert headers["Authorization"] == "Bearer gsk_test"
+    assert "python-urllib" not in headers["User-Agent"].lower()
+    assert headers["User-Agent"].startswith("NovaGPS/")
+
+
 def test_no_key_means_not_available(monkeypatch):
     client = _client(monkeypatch, llm_backend="groq")
     status = client.check_availability()
@@ -122,6 +132,19 @@ def test_engine_used_reports_hosted_model(monkeypatch):
         hosted_model="llama-3.3-70b-versatile",
     )
     assert brain.engine_used == "HOSTED:llama-3.3-70b-versatile"
+
+
+def test_hosted_label_wins_over_shield_engine_state():
+    from nova_core.brain import NovaBrain
+
+    brain = NovaBrain.__new__(NovaBrain)
+    brain.engine = types.SimpleNamespace(engine_used="DETERMINISTIC_SHIELD", state="shield_only")
+    brain.llm = types.SimpleNamespace(
+        is_hosted=lambda: True,
+        is_available=lambda: True,
+        hosted_model="openai/gpt-oss-120b",
+    )
+    assert brain.engine_used == "HOSTED:openai/gpt-oss-120b"
 
 
 @pytest.mark.asyncio

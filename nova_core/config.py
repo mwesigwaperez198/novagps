@@ -77,7 +77,7 @@ class NovaCoreConfig:
         default_factory=lambda: os.environ.get("NOVA_LLM_BASE_URL", "https://api.groq.com/openai/v1")
     )
     llm_model: str = field(
-        default_factory=lambda: os.environ.get("NOVA_LLM_MODEL", "llama-3.3-70b-versatile")
+        default_factory=lambda: os.environ.get("NOVA_LLM_MODEL", "openai/gpt-oss-120b")
     )
     llm_timeout: int = field(default_factory=lambda: int(os.environ.get("NOVA_LLM_TIMEOUT", "60")))
 

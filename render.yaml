@@ -46,7 +46,7 @@ services:
       - key: NOVA_LLM_BASE_URL
         value: https://api.groq.com/openai/v1
       - key: NOVA_LLM_MODEL
-        value: llama-3.3-70b-versatile
+        value: openai/gpt-oss-120b
       - key: NOVA_AGENT_NAME
         value: LAU
       - key: NOVA_EMBEDDED_CTX
