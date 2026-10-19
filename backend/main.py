@@ -14,6 +14,28 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, 
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from prometheus_fastapi_instrumentator import Instrumentator
+
+# FastAPI 0.148 lists mounted routers in app.routes as _IncludedRouter nodes
+# that carry no `.path`. prometheus-fastapi-instrumentator 7.1.0 walks that list
+# to label each request and dereferences `.path` unconditionally, so any request
+# matched inside an included router dies with AttributeError -> 500 (this took
+# the entire /nova-core surface down). Wrap the resolver so an unnameable route
+# degrades to "untemplated" instead of aborting the request.
+try:
+    from prometheus_fastapi_instrumentator import routing as _pf_routing
+
+    _pf_get_route_name = _pf_routing.get_route_name
+
+    def _pf_safe_get_route_name(request):
+        try:
+            return _pf_get_route_name(request)
+        except AttributeError:
+            return None
+
+    _pf_routing.get_route_name = _pf_safe_get_route_name
+except Exception:  # instrumentation is optional; never block startup over it
+    pass
+
 from sqlalchemy import delete, func, or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -93,7 +115,6 @@ app.add_middleware(
 )
 
 Instrumentator().instrument(app).expose(app)
-
 
 @app.on_event("startup")
 def startup_event() -> None:
