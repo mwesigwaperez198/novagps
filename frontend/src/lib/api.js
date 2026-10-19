@@ -1,3 +1,5 @@
+import { consumeSseStream } from "./sse.js";
+
 const isDev = Boolean(import.meta.env.DEV);
 const API_URL = import.meta.env.VITE_API_URL || (isDev ? "http://localhost:8000" : "");
 const wsProtocol = typeof location !== "undefined" && location.protocol === "https:" ? "wss" : "ws";
@@ -218,3 +220,23 @@ export const api = {
   analyticsLocationStats: (deviceId) => request(`/analytics/device/${encodeURIComponent(deviceId)}/location-stats`),
   analyticsExport: (deviceId, format = "csv") => request(`/analytics/device/${encodeURIComponent(deviceId)}/export?format=${format}`),
 };
+
+// Streaming twin of novaAgentDispatch. Consumes the Server-Sent Event frames
+// from /nova-core/agent/stream and hands each one to onEvent as it arrives, so
+// the transcript can render thoughts, tool chips and tokens live.
+export async function novaAgentStream(command, deviceId = "", { onEvent, signal } = {}) {
+  const headers = { "Content-Type": "application/json" };
+  if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+
+  const response = await fetch(`${API_URL}/nova-core/agent/stream`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ command, device_id: deviceId }),
+    signal,
+  });
+  if (!response.ok || !response.body) {
+    throw new Error(response.statusText || `stream failed (${response.status})`);
+  }
+
+  await consumeSseStream(response.body, onEvent);
+}

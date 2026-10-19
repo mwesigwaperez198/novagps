@@ -8,11 +8,13 @@ import re
 import time
 import sys
 import json
+import asyncio
 from uuid import uuid4
 from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 try:  # backend/main.py supplies this in every operational runtime
     from auth import Principal, require_roles
@@ -1092,6 +1094,67 @@ async def run_dispatch(command: str, device_id: str = "") -> dict:
 @nova_router.post("/agent/dispatch")
 async def nova_agent_dispatch(req: NovaAgentCommandRequest):
     return await run_dispatch(req.command, req.device_id)
+
+
+def _sse(event: str, data: dict) -> str:
+    """One Server-Sent Event frame. Kept tiny so the browser can parse it raw."""
+    return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
+
+
+async def _token_frames(text: str):
+    """Split a finished answer into word-sized frames for a live typing feel.
+
+    Real token streaming only helps long, model-generated answers; the tool run
+    already blocks, so an evenly paced reveal reads naturally and works the same
+    whether the answer came from the shield or a hosted model.
+    """
+    for piece in re.split(r"(\s+)", text or ""):
+        if piece:
+            yield piece
+            await asyncio.sleep(0.012)
+
+
+@nova_router.post("/agent/stream")
+async def nova_agent_stream(req: NovaAgentCommandRequest):
+    """Streaming twin of /agent/dispatch for the conversational LAU UI."""
+    async def event_stream():
+        try:
+            yield _sse("status", {"state": "thinking"})
+            result = await run_dispatch(req.command, req.device_id)
+
+            for index, thought in enumerate(result.get("thought_process") or []):
+                yield _sse("thought", {"index": index, "text": thought})
+
+            for tool in result.get("tools_executed") or []:
+                yield _sse("tool", {"name": tool})
+
+            if result.get("action"):
+                yield _sse("action", result["action"])
+
+            async for piece in _token_frames(result.get("response", "")):
+                yield _sse("token", {"text": piece})
+
+            yield _sse("done", {
+                "intent": result.get("intent"),
+                "engine": result.get("engine"),
+                "tools_executed": result.get("tools_executed", []),
+                "latency_ms": result.get("latency_ms", 0),
+                "results": result.get("results", {}),
+            })
+        except asyncio.CancelledError:  # client navigated away mid-stream
+            raise
+        except Exception as exc:  # keep the socket open and tell the UI
+            yield _sse("error", {"message": str(exc)})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 class NovaSkillRunRequest(BaseModel):
