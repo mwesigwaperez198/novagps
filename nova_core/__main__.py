@@ -18,6 +18,7 @@ import sys
 import time
 from pathlib import Path
 
+from . import ops
 from .brain import NovaBrain
 from .config import get_config
 from .memory import NovaMemory
@@ -669,6 +670,11 @@ async def cmd_chat():
 
 
 def main():
+    argv = sys.argv[1:]
+    if argv and argv[0] in ("watch", "theft", "radar", "skills", "skill"):
+        setup_file_logging()
+        sys.exit(ops.run_ops(argv))
+
     parser = argparse.ArgumentParser(description="NOVA-CORE Agent")
     parser.add_argument("--patrol", action="store_true", help="Start autonomous patrol daemon")
     parser.add_argument("--audit", action="store_true", help="Run daily security audit")

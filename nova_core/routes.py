@@ -1094,5 +1094,35 @@ async def nova_agent_dispatch(req: NovaAgentCommandRequest):
     return await run_dispatch(req.command, req.device_id)
 
 
+class NovaSkillRunRequest(BaseModel):
+    skill: str
+    target: str = ""
+    args: list[str] = []
+
+
+@nova_router.get("/skills")
+def nova_skills_index():
+    """Installed external tools the queen agent can drive, with install hints."""
+    try:
+        from .skills import list_skills
+    except Exception as exc:  # pragma: no cover - defensive
+        raise HTTPException(status_code=503, detail=f"skills registry unavailable: {exc}")
+    skills = list_skills()
+    return {"count": len(skills), "skills": skills}
+
+
+@nova_router.post("/skills/run")
+def nova_skill_run(req: NovaSkillRunRequest):
+    """Guarded execution of one registered skill. Lab-only skills require NOVA_LAB_MODE=1."""
+    try:
+        from .skills import SkillRefused, run_skill
+    except Exception as exc:  # pragma: no cover - defensive
+        raise HTTPException(status_code=503, detail=f"skills registry unavailable: {exc}")
+    try:
+        return run_skill(req.skill, target=req.target or None, args=req.args or None)
+    except SkillRefused as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
+
 def register_nova_routes(app):
     app.include_router(nova_router)

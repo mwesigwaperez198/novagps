@@ -24,7 +24,7 @@ from command_registry import CommandRegistryError, execute_registered_command
 from config import get_settings
 from db import get_db, init_db
 from eventbus import bus
-from jose import jwt
+from jose import JWTError, jwt
 from kafka_producer import publish_location_event
 from models import (
     Alert,
@@ -840,7 +840,7 @@ def device_self_locate(
     db.add(location)
     db.commit()
     db.refresh(location)
-    return {
+    response: dict[str, Any] = {
         "status": "accepted",
         "location_id": location.id,
         "device_name": device.name,
@@ -848,6 +848,24 @@ def device_self_locate(
         "latitude": latitude,
         "longitude": longitude,
     }
+    # Self-locate is a weaker signal than a full ingest, but it still counts as
+    # a sighting for a watched device. Reuse the same matcher so the two entry
+    # points can never drift apart.
+    sighting = _watchlist_hit(
+        db,
+        device,
+        LocationUpdateRequest(
+            identifier=identifier,
+            latitude=latitude,
+            longitude=longitude,
+            place_name=place_name,
+            source="mobile",
+        ),
+    )
+    if sighting is not None:
+        db.commit()
+        response["watchlist"] = sighting
+    return response
 
 
 def _parse_traccar_timestamp(raw: str) -> datetime | None:
@@ -915,6 +933,56 @@ def list_devices(
 ) -> list[DeviceResponse]:
     devices = db.query(Device).order_by(Device.created_at.desc()).limit(500).all()
     return [device_response(db, device) for device in devices]
+
+
+@app.get("/devices/health")
+def devices_health(
+    stale_after_seconds: int = Query(300, ge=30, le=86400),
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(require_roles("viewer", "operator", "admin")),
+) -> dict[str, Any]:
+    """Heartbeat view: which devices are still reporting, and which went quiet.
+
+    A tracker that has been uninstalled, factory-reset, or killed shows up as
+    stale here, which is exactly the silent-failure signal an operator needs.
+    """
+    now = utcnow()
+    devices = db.query(Device).order_by(Device.created_at.desc()).limit(500).all()
+    watched = db.query(Watchlist).filter(Watchlist.status != WatchlistStatus.recovered.value).all()
+    watched_imeis = {w.imei for w in watched if w.imei}
+    watched_phones = [w.phone for w in watched if w.phone]
+    items: list[dict[str, Any]] = []
+    for device in devices:
+        last = (
+            db.query(Location)
+            .filter(Location.device_id == device.id)
+            .order_by(Location.recorded_at.desc())
+            .first()
+        )
+        recorded = last.recorded_at if last else None
+        if recorded is not None and recorded.tzinfo is None:
+            recorded = recorded.replace(tzinfo=timezone.utc)
+        age = (now - recorded).total_seconds() if recorded is not None else None
+        watchlisted = bool(device.imei and device.imei in watched_imeis)
+        if not watchlisted and device.phone:
+            watchlisted = any(
+                len(p) >= 9 and device.phone[-9:] == p[-9:] for p in watched_phones
+            )
+        items.append(
+            {
+                "device_id": device.id,
+                "name": device.name,
+                "identifier": device.identifier,
+                "phone": device.phone,
+                "imei": device.imei,
+                "is_active": device.is_active,
+                "last_seen": last.recorded_at.isoformat() if last and last.recorded_at else None,
+                "age_seconds": round(age, 1) if age is not None else None,
+                "stale": age is None or age > stale_after_seconds,
+                "watchlisted": watchlisted,
+            }
+        )
+    return {"stale_after_seconds": stale_after_seconds, "count": len(items), "devices": items}
 
 
 @app.get("/devices/{device_id}", response_model=DeviceResponse)
@@ -2315,6 +2383,151 @@ def watchlist_mark_recovered(
     create_audit(db, principal, "watchlist.recover", {"watchlist_id": watch_id})
     db.commit()
     return {"status": "recovered", "watchlist_id": watch_id}
+
+
+@app.get("/watchlist/{watch_id}/sightings")
+def watchlist_sightings(
+    watch_id: str,
+    limit: int = Query(50, ge=1, le=500),
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(require_roles("viewer", "operator", "admin")),
+) -> dict[str, Any]:
+    """Last-seen trail for a watched device.
+
+    Once the matcher records a first sighting, every subsequent fix the
+    reporting device sends is a live trail. This returns the geofence-grade
+    trail plus every recovery alert raised for the entry, so an operator has
+    one page to hand to the police.
+    """
+    entry = db.get(Watchlist, watch_id)
+    if not entry:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Watchlist entry not found")
+    sightings: list[dict[str, Any]] = []
+    if entry.first_sighted_device_id:
+        rows = (
+            db.query(Location)
+            .filter(Location.device_id == entry.first_sighted_device_id)
+            .order_by(Location.recorded_at.desc())
+            .limit(limit)
+            .all()
+        )
+        sightings = [
+            {
+                "location_id": row.id,
+                "device_id": row.device_id,
+                "latitude": row.latitude,
+                "longitude": row.longitude,
+                "place_name": row.place_name,
+                "source": row.source,
+                "ip_address": row.ip_address,
+                "recorded_at": row.recorded_at.isoformat() if row.recorded_at else None,
+            }
+            for row in rows
+        ]
+    alerts = (
+        db.query(Alert)
+        .filter(Alert.alert_type == "watchlist_sighting")
+        .order_by(Alert.created_at.desc())
+        .limit(limit * 4)
+        .all()
+    )
+    related = [a for a in alerts if (a.metadata_json or {}).get("watchlist_id") == watch_id][:limit]
+    return {
+        "watchlist_id": entry.id,
+        "label": entry.label,
+        "imei": entry.imei,
+        "phone": entry.phone,
+        "status": entry.status,
+        "first_sighted_device_id": entry.first_sighted_device_id,
+        "first_sighted_at": entry.first_sighted_at.isoformat() if entry.first_sighted_at else None,
+        "sightings": sightings,
+        "alerts": [
+            {
+                "alert_id": a.id,
+                "severity": a.severity,
+                "title": a.title,
+                "message": a.message,
+                "created_at": a.created_at.isoformat(),
+                "metadata": a.metadata_json,
+            }
+            for a in related
+        ],
+    }
+
+
+PAIRING_SCOPE = "location,tracking,security"
+PAIRING_TTL_MINUTES = 1440
+
+
+@app.post("/device/pairing", status_code=status.HTTP_201_CREATED)
+def create_device_pairing(
+    request: Request,
+    identifier: str = Query(..., min_length=3, max_length=160),
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict[str, Any]:
+    """Mint a one-scan activation payload for the Android agent.
+
+    The dashboard renders this as a QR; the agent scans it once and is bound to
+    the account with consent scope pre-loaded. The token is short-lived and
+    signed with the same key as login, so a leaked QR ages out on its own.
+    """
+    device = (
+        db.query(Device)
+        .filter(or_(Device.identifier == identifier, Device.id == identifier))
+        .first()
+    )
+    if not device:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
+    expires_in = timedelta(minutes=PAIRING_TTL_MINUTES)
+    pair_token = jwt.encode(
+        {
+            "sub": device.id,
+            "identifier": device.identifier or device.imei or device.id,
+            "scope": PAIRING_SCOPE,
+            "purpose": "pairing",
+            "exp": datetime.now(timezone.utc) + expires_in,
+        },
+        settings.secret_key,
+        algorithm=settings.jwt_algorithm,
+    )
+    create_audit(db, principal, "device.pairing", {"device_id": device.id})
+    db.commit()
+    return {
+        "server_url": str(request.base_url).rstrip("/"),
+        "identifier": device.identifier or device.imei or device.id,
+        "device_id": device.id,
+        "name": device.name,
+        "imei": device.imei,
+        "phone": device.phone,
+        "scope": PAIRING_SCOPE,
+        "pair_token": pair_token,
+        "expires_in_minutes": PAIRING_TTL_MINUTES,
+    }
+
+
+@app.post("/device/pairing/verify")
+def verify_device_pairing(
+    token: str = Query(..., min_length=10),
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(require_roles("viewer", "operator", "admin")),
+) -> dict[str, Any]:
+    try:
+        claims = jwt.decode(token, settings.secret_key, algorithms=[settings.jwt_algorithm])
+    except JWTError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired pairing token")
+    if claims.get("purpose") != "pairing":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Not a pairing token")
+    device = db.get(Device, claims.get("sub"))
+    if not device:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
+    return {
+        "valid": True,
+        "device_id": device.id,
+        "identifier": claims.get("identifier"),
+        "scope": claims.get("scope"),
+        "expires_at": claims.get("exp"),
+    }
 
 
 @app.get("/camera/stream/{camera_id}")

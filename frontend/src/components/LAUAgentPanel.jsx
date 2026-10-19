@@ -1,5 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { api, request } from "../lib/api.js";
+import LAUOpsPanel from "./LAUOpsPanel.jsx";
+
+const MODES = [
+  { id: "console", label: "CONSOLE" },
+  { id: "theft", label: "THEFT" },
+  { id: "skills", label: "SKILLS" },
+  { id: "live", label: "LIVE" },
+];
 
 const QUICK_ACTIONS = [
   { id: "health", label: "System Health", cmd: "analyze system health and status" },
@@ -22,6 +30,7 @@ export default function LAUHud({ isOpen, onClose, deviceId = "" }) {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [engineState, setEngineState] = useState(null);
+  const [mode, setMode] = useState("console");
   const scrollRef = useRef(null);
   const inputRef = useRef(null);
 
@@ -161,8 +170,25 @@ export default function LAUHud({ isOpen, onClose, deviceId = "" }) {
           <span className={`lau-hud-dot ${engineReady ? "online" : ""}`} />
           <span className="lau-hud-title">LAU // COGNITIVE_SHIELD</span>
         </div>
-        <button className="lau-hud-close" onClick={onClose} type="button">ESC</button>
+        <div className="lau-hud-modes">
+          {MODES.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={`lau-hud-mode ${mode === item.id ? "active" : ""}`}
+              onClick={() => setMode(item.id)}
+            >
+              {item.label}
+            </button>
+          ))}
+          <button className="lau-hud-close" onClick={onClose} type="button">ESC</button>
+        </div>
       </div>
+
+      {mode !== "console" ? (
+        <LAUOpsPanel mode={mode} deviceId={deviceId} />
+      ) : (
+      <>
 
       <div className="lau-hud-terminal" ref={scrollRef}>
         {logs.length === 0 && (
@@ -258,6 +284,8 @@ export default function LAUHud({ isOpen, onClose, deviceId = "" }) {
           </button>
         ))}
       </div>
+      </>
+      )}
     </div>
   );
 }

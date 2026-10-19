@@ -186,6 +186,13 @@ export const api = {
   },
   watchlistRemove: (watchId) => request(`/watchlist/${encodeURIComponent(watchId)}`, { method: "DELETE" }),
   watchlistRecover: (watchId) => request(`/watchlist/${encodeURIComponent(watchId)}/recover`, { method: "POST" }),
+  watchlistSightings: (watchId) => request(`/watchlist/${encodeURIComponent(watchId)}/sightings`),
+  devicesHealth: (staleAfterSeconds = 300) => request(`/devices/health?stale_after_seconds=${staleAfterSeconds}`),
+
+  // LAU skills (external security/OSINT tools)
+  novaSkills: () => request("/nova-core/skills"),
+  novaSkillRun: (skill, target = "", args = []) =>
+    request("/nova-core/skills/run", { method: "POST", body: JSON.stringify({ skill, target, args }) }),
 
   // Scheduled tasks
   taskSchedule: (name, cronExpr, commandId = "") =>
