@@ -19,7 +19,7 @@ export default function LoginScreen({ onLogin }) {
     try {
       const result = await api.login({ email, password });
       setAuthToken(result.access_token);
-      onLogin(result);
+      onLogin({ ...result, email });
     } catch (err) {
       setError(err.message || "Login failed");
     } finally {

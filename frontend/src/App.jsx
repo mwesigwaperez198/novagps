@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Monitor, Map, Menu, X, LogOut, Search } from "lucide-react";
 import AlertsLog from "./components/AlertsLog.jsx";
 import AlertsPanel from "./components/AlertsPanel.jsx";
+import AddDeviceDialog from "./components/AddDeviceDialog.jsx";
 import AnalyticsPanel from "./components/AnalyticsPanel.jsx";
 import AuditLogPanel from "./components/AuditLogPanel.jsx";
 import BroadcastController from "./components/BroadcastController.jsx";
@@ -88,6 +89,10 @@ export default function App() {
   const wsRef = useRef(null);
   const fetchedNewDevices = useRef(new Set());
   const [lauOpen, setLauOpen] = useState(false);
+  const [addDeviceOpen, setAddDeviceOpen] = useState(false);
+  const [lauUnread, setLauUnread] = useState(0);
+  const seenAlerts = useRef(new Set());
+  const alertsPrimed = useRef(false);
 
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -123,11 +128,40 @@ export default function App() {
   }, [selectedDeviceId]);
 
   function addToast(message, type = "info") {
-    const id = Date.now();
+    const id = Date.now() + Math.random();
     setToasts((items) => [...items, { id, message, type }]);
     setTimeout(() => {
       setToasts((items) => items.filter((t) => t.id !== id));
-    }, 4000);
+    }, 6000);
+  }
+
+  // One path for both the live socket and the polling fallback, so LAU never
+  // announces the same event twice.
+  function handleAlert(alert) {
+    const key =
+      alert.id ||
+      `${alert.alert_type || "alert"}:${alert.recorded_at || ""}:${alert.title || ""}`;
+    if (seenAlerts.current.has(key)) return;
+    seenAlerts.current.add(key);
+    const critical = alert.severity === "critical";
+    addToast(
+      `LAU \u26A0 ${alert.title || alert.alert_type || "Alert"}${
+        alert.message ? ` — ${alert.message}` : ""
+      }`,
+      critical ? "critical" : "info",
+    );
+    setLauUnread((count) => count + 1);
+    setEvents((items) =>
+      [
+        {
+          id: key,
+          kind: alert.alert_type || "alert",
+          message: alert.title || alert.message || "Alert",
+          timestamp: alert.recorded_at || new Date().toISOString(),
+        },
+        ...items,
+      ].slice(0, 50),
+    );
   }
 
   async function loadDevices() {
@@ -149,13 +183,20 @@ export default function App() {
   function connectWebSocket() {
     if (wsRef.current) return;
     try {
-      const ws = new WebSocket(`${WS_URL}?channel=map`);
+      const token = getAuthToken() || "";
+      const ws = new WebSocket(
+        `${WS_URL}?channel=map&token=${encodeURIComponent(token)}`,
+      );
       ws.onopen = () => {
         addToast("WebSocket connected", "info");
       };
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
+          if (data.event === "alert.created") {
+            handleAlert(data);
+            return;
+          }
           if (data.event === "location.updated" && data.device_id) {
             setDevices((items) => {
               const known = items.some((device) => device.id === data.device_id);
@@ -251,6 +292,49 @@ export default function App() {
     return () => clearInterval(interval);
   }, [selectedDeviceId, searchQuery, viewMode, user]);
 
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    const pollAlerts = async () => {
+      try {
+        const list = await api.alertsList(25);
+        if (cancelled) return;
+        if (!alertsPrimed.current) {
+          // Seed history silently so LAU does not flood the screen with old
+          // alerts on first load; only genuinely new events notify.
+          list.forEach((a) =>
+            seenAlerts.current.add(
+              a.id || `${a.alert_type}:${a.recorded_at}:${a.title}`,
+            ),
+          );
+          alertsPrimed.current = true;
+          return;
+        }
+        list.forEach(handleAlert);
+      } catch {
+        /* offline; the socket or next poll will retry */
+      }
+    };
+    pollAlerts();
+    const interval = setInterval(pollAlerts, 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [user]);
+
+  function handleDeviceRegistered(device) {
+    setDevices((items) =>
+      items.some((d) => d.id === device.id) ? items : [device, ...items],
+    );
+    setSelectedDeviceId(device.id);
+    addToast(`${device.name} added — waiting for its first location`, "success");
+    setEvents((items) => [
+      { level: "REG", text: `${device.name} registered` },
+      ...items,
+    ]);
+  }
+
   function handleLogout() {
     setAuthToken(null);
     setUser(null);
@@ -317,7 +401,7 @@ export default function App() {
               <DeviceList devices={devices} selectedId={selectedDevice?.id} onSelect={(id) => {
                 setSelectedDeviceId(id);
                 setSidebarOpen(false);
-              }} onRefresh={loadDevices} />
+              }} onRefresh={loadDevices} onAddDevice={() => setAddDeviceOpen(true)} />
             </div>
             <div className="main-content">
               <LiveMap device={selectedDevice} />
@@ -326,7 +410,7 @@ export default function App() {
           </>
         ) : (
           <>
-            <DeviceList devices={devices} selectedId={selectedDevice?.id} onSelect={setSelectedDeviceId} onRefresh={loadDevices} />
+            <DeviceList devices={devices} selectedId={selectedDevice?.id} onSelect={setSelectedDeviceId} onRefresh={loadDevices} onAddDevice={() => setAddDeviceOpen(true)} />
             <LiveMap device={selectedDevice} onScanNet={() => setActivePanel("net")} nearby={nearby} />
             <aside className="right-rail">
               <DeviceInsight device={selectedDevice} onSimulated={() => loadDevices()} />
@@ -398,18 +482,26 @@ export default function App() {
       </div>
 
       <footer className="nova-footer">
-        <div className="nova-footer-lau" onClick={() => setLauOpen(true)} role="button" tabIndex={0} onKeyDown={(e) => e.key === "Enter" && setLauOpen(true)}>
+        <div className="nova-footer-lau" onClick={() => { setLauOpen(true); setLauUnread(0); }} role="button" tabIndex={0} onKeyDown={(e) => e.key === "Enter" && (setLauOpen(true), setLauUnread(0))}>
           <span className="lau-footer-ping">
             <span className="lau-footer-ping-ring" />
             <span className="lau-footer-ping-dot" />
           </span>
           <span className="lau-footer-label">AGENT SEC // </span>
           <span className="lau-footer-active">LAU: ACTIVE</span>
+          {lauUnread > 0 && <span className="lau-footer-badge">{lauUnread}</span>}
         </div>
         <div className="nova-footer-shortcut">SHIFT + CTRL + / FOR HUD OVERRIDE</div>
       </footer>
 
       <LAUHud isOpen={lauOpen} onClose={() => setLauOpen(false)} deviceId={selectedDevice?.id || ""} />
+      <AddDeviceDialog
+        open={addDeviceOpen}
+        onClose={() => setAddDeviceOpen(false)}
+        onRegistered={handleDeviceRegistered}
+        onError={(message) => addToast(message, "error")}
+        defaultEmail={user?.email || ""}
+      />
     </main>
   );
 }

@@ -13,10 +13,10 @@ def token_allowed(token: str | None, channel: str) -> bool:
     from config import get_settings
 
     settings = get_settings()
-    if settings.environment == "development" and not token:
-        return True
     if not token:
-        return False
+        # Anonymous listeners are a development convenience only.
+        return settings.environment == "development"
+
     with SessionLocal() as db:
         session = (
             db.query(BroadcastSession)
@@ -28,4 +28,20 @@ def token_allowed(token: str | None, channel: str) -> bool:
             )
             .first()
         )
-        return bool(session)
+        if session:
+            return True
+
+    # A signed-in operator/admin holds a login JWT, not a broadcast session.
+    # Accept it so the dashboard's live map and LAU notifications actually work
+    # in production instead of silently closing the socket.
+    try:
+        from jose import JWTError, jwt
+
+        payload = jwt.decode(
+            token,
+            settings.secret_key,
+            algorithms=[settings.jwt_algorithm],
+        )
+        return payload.get("role") in {"viewer", "auditor", "operator", "admin"}
+    except Exception:
+        return False

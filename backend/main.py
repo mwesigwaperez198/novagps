@@ -816,6 +816,24 @@ def update_location(
     sighting = _watchlist_hit(db, device, payload)
     if sighting is not None:
         db.commit()
+        if sighting.get("first_sighting"):
+            # Surface the match the instant it lands: the dashboard and LAU
+            # watch the bus, so this is the critical recovery notification.
+            bus.publish_threadsafe({
+                "event": "alert.created",
+                "alert_type": "watchlist_sighting",
+                "severity": "critical",
+                "device_id": device.id,
+                "watchlist_id": sighting["watchlist_id"],
+                "title": f"Watchlisted device sighted: {sighting['label']}",
+                "message": (
+                    f"IMEI {sighting.get('imei') or 'n/a'} reported at "
+                    f"{sighting['latitude']:.6f}, {sighting['longitude']:.6f}."
+                ),
+                "latitude": sighting["latitude"],
+                "longitude": sighting["longitude"],
+                "recorded_at": utcnow().isoformat(),
+            })
     if settings.database_is_sqlite:
         from worker.geofence import check_event_against_geofences_local
 
@@ -2228,6 +2246,15 @@ def vehicle_stolen_report(
         )
         db.add(alert)
         db.commit()
+        bus.publish_threadsafe({
+            "event": "alert.created",
+            "alert_type": "theft",
+            "severity": "critical",
+            "device_id": device_id,
+            "title": alert.title,
+            "message": alert.message,
+            "recorded_at": utcnow().isoformat(),
+        })
     db.close()
     return result
 

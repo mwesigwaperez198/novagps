@@ -421,6 +421,10 @@ class NovaBrain:
         query_lower = query.lower()
         actions = []
 
+        skill_actions = self._parse_skill_intent(query, query_lower)
+        if skill_actions is not None:
+            return {"intent": "execute", "actions": skill_actions}
+
         tool_mappings = {
             "port scan": "port_scan",
             "scan ports": "port_scan",
@@ -806,6 +810,70 @@ class NovaBrain:
                 ordered.append(w)
         return ordered[:3]
 
+    def _parse_skill_intent(self, query: str, query_lower: str):
+        """Route 'run <skill> <target>', a bare skill name, or a skills query.
+
+        Returns a list of actions when the prompt is clearly about a registry
+        skill, otherwise None so normal tool routing continues untouched.
+        """
+        from .skills.registry import SKILLS
+
+        if any(p in query_lower for p in (
+            "list skills", "available skills", "skill catalog", "what skills",
+            "show skills", "skills do you", "your skills", "installed tools",
+        )):
+            return [{"tool": "skill_catalog", "params": {}}]
+
+        keys = {s.key for s in SKILLS}
+
+        target = None
+        url = re.search(r"https?://[^\s]+", query)
+        ip = re.search(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", query)
+        if url:
+            target = url.group(0).rstrip(".,;")
+        elif ip:
+            target = ip.group(0)
+
+        explicit = re.search(
+            r"(?:run|use|execute|launch|fire)\s+(?:the\s+)?skill\s+([a-z0-9][a-z0-9\-]+)"
+            r"|(?:run|use|execute|launch|fire)\s+([a-z0-9][a-z0-9\-]+)",
+            query_lower,
+        )
+        key = None
+        if explicit:
+            key = explicit.group(1) or explicit.group(2)
+        if key not in keys:
+            key = None
+            for candidate in sorted(keys, key=len, reverse=True):
+                if re.search(rf"(?<![a-z0-9]){re.escape(candidate)}(?![a-z0-9])", query_lower):
+                    key = candidate
+                    break
+        if key is None:
+            return None
+
+        if target is None:
+            after = re.search(rf"(?<![a-z0-9]){re.escape(key)}(?![a-z0-9])\s+(\S+)", query)
+            if after:
+                candidate = after.group(1).strip().strip("\"'")
+                if candidate.lower() not in ("the", "a", "an", "on", "against", "for", "scan", "run"):
+                    target = candidate
+
+        return [{"tool": "skill", "params": {"key": key, "target": target}}]
+
+    def _format_skill(self, o: dict) -> str:
+        name = o.get("name") or o.get("skill") or "skill"
+        status = o.get("status")
+        if status == "missing":
+            return f"{name} is not installed here — {o.get('install', 'no install hint')}"
+        if status == "ok":
+            out = (o.get("stdout") or "").strip()
+            preview = "\n".join(out.splitlines()[:12])
+            return f"{name} · ok\n{preview}" if preview else f"{name} · ok (no output)"
+        if status == "timeout":
+            return f"{name} · timed out after {o.get('timeout')}s"
+        err = o.get("stderr") or o.get("error") or status or "unknown"
+        return f"{name} · {status}: {str(err)[:400]}"
+
     def _synthesize_response(self, query: str, results: dict) -> str:
         if not results:
             return self._help_text()
@@ -1082,10 +1150,23 @@ class NovaBrain:
                 by_cat.setdefault(t["category"], []).append(t["name"])
             cat_count = ", ".join(f"{cat}:{len(items)}" for cat, items in sorted(by_cat.items()))
             names = ", ".join(t["name"] for t in tools[:14] if not t.get("hide_from_caps"))
+            skill_note = ""
+            try:
+                from .skills.registry import list_skills
+
+                skills = list_skills()
+                ready = sum(1 for s in skills if s["available"])
+                sample = ", ".join(s["name"] for s in skills[:6])
+                skill_note = (
+                    f" Beyond the verb set I reach {len(skills)} external skills on demand "
+                    f"({ready} live here right now) — {sample}, and more."
+                )
+            except Exception:
+                pass
             body = (
                 f"I run {len(tools)} tools live — {cat_count}. Loadout: {names}. "
                 f"Backed by the shield, the device command chain, and the sovereign "
-                f"provisioning lane. {invite}"
+                f"provisioning lane.{skill_note} {invite}"
             )
         elif asking_state:
             body = (
@@ -1148,6 +1229,8 @@ class NovaBrain:
             "radio_sniffer": lambda o: format_radio_sniffer(o, 0),
             "location_engine": lambda o: format_location_engine(o, 0),
             "remote_bridge": lambda o: format_remote_bridge(o, 0),
+            "skill": lambda o: self._format_skill(o),
+            "skill_catalog": lambda o: f"{o.get('ready_count', 0)}/{o.get('count', 0)} skills ready on this host",
         }
 
         formatter = formatters.get(tool_name)
@@ -1179,6 +1262,16 @@ class NovaBrain:
         parts.append("  'scan for leaked secrets'")
         parts.append("  'system status overview'")
         parts.append("  'fuzz the API'")
+        try:
+            from .skills.registry import list_skills
+
+            skills = list_skills()
+            ready = [s["name"] for s in skills if s["available"]]
+            parts.append("\nSKILLS (say 'run <skill> <target>'):")
+            parts.append(f"  registered: {len(skills)} · ready now: {len(ready) or 'none'}")
+            parts.append(f"  e.g. 'run nmap 10.0.0.5', 'run nuclei https://target', 'list skills'")
+        except Exception:
+            pass
 
         return "\n".join(parts)
 

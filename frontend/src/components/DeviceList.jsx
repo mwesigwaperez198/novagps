@@ -1,4 +1,4 @@
-import { RefreshCw, Smartphone, Truck } from "lucide-react";
+import { Plus, RefreshCw, Smartphone, Truck } from "lucide-react";
 
 function DeviceIcon({ type }) {
   return type === "vehicle" || type === "motorcycle" ? <Truck size={16} /> : <Smartphone size={16} />;
@@ -10,14 +10,21 @@ function formatPlace(loc) {
   return parts[0]?.trim() || null;
 }
 
-export default function DeviceList({ devices, selectedId, onSelect, onRefresh }) {
+export default function DeviceList({ devices, selectedId, onSelect, onRefresh, onAddDevice }) {
   return (
     <aside className="panel device-list">
       <div className="panel-title">
         <span>DEVICES</span>
-        <button className="icon-button" onClick={onRefresh} title="Refresh devices">
-          <RefreshCw size={15} />
-        </button>
+        <span className="device-list-actions">
+          {onAddDevice && (
+            <button className="icon-button" onClick={onAddDevice} title="Add a device" type="button">
+              <Plus size={15} />
+            </button>
+          )}
+          <button className="icon-button" onClick={onRefresh} title="Refresh devices" type="button">
+            <RefreshCw size={15} />
+          </button>
+        </span>
       </div>
       <div className="device-scroll">
         {devices.map((device) => {
@@ -38,8 +45,21 @@ export default function DeviceList({ devices, selectedId, onSelect, onRefresh })
             </button>
           );
         })}
-        {!devices.length && <div className="empty">NO DEVICES</div>}
+        {!devices.length && (
+          <div className="empty device-empty">
+            <p>No devices yet.</p>
+            <p className="device-empty-hint">
+              Add a phone or vehicle to start tracking its live location.
+            </p>
+            {onAddDevice && (
+              <button className="command-button" onClick={onAddDevice} type="button">
+                <Plus size={14} /> ADD DEVICE
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </aside>
   );
 }
+

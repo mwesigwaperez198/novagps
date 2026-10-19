@@ -130,3 +130,60 @@ def test_owner_password_prefers_canonical_name(monkeypatch):
     monkeypatch.setenv("OWNERS_PASSWORD", "plural")
     settings = Settings()
     assert settings.owner_password == "canonical"
+
+
+class _EmptyQuery:
+    def filter(self, *args, **kwargs):
+        return self
+
+    def first(self):
+        return None
+
+
+class _EmptyDB:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def query(self, *args, **kwargs):
+        return _EmptyQuery()
+
+
+def test_broadcast_token_accepts_login_jwt(monkeypatch):
+    import broadcast_auth
+    import config
+
+    secret = "broadcast-jwt-secret"
+
+    class _Settings:
+        environment = "production"
+        secret_key = secret
+        jwt_algorithm = "HS256"
+
+    monkeypatch.setattr(config, "get_settings", lambda: _Settings())
+    monkeypatch.setattr(broadcast_auth, "SessionLocal", lambda: _EmptyDB())
+
+    owner = jwt.encode({"sub": "owner@test.com", "role": "admin"}, secret, algorithm="HS256")
+    assert broadcast_auth.token_allowed(owner, "map") is True
+
+    # Production must not accept anonymous listeners, and junk tokens fail closed.
+    assert broadcast_auth.token_allowed(None, "map") is False
+    assert broadcast_auth.token_allowed("not-a-jwt", "map") is False
+
+    forged = jwt.encode({"sub": "x", "role": "admin"}, "wrong-secret", algorithm="HS256")
+    assert broadcast_auth.token_allowed(forged, "map") is False
+
+
+def test_broadcast_token_allows_dev_anonymous(monkeypatch):
+    import broadcast_auth
+    import config
+
+    class _Settings:
+        environment = "development"
+        secret_key = "dev"
+        jwt_algorithm = "HS256"
+
+    monkeypatch.setattr(config, "get_settings", lambda: _Settings())
+    assert broadcast_auth.token_allowed(None, "map") is True

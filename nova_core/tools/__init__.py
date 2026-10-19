@@ -118,6 +118,7 @@ def _register_all_tools(registry: ToolRegistry):
     from .code_analysis import register_code_analysis_tools
     from .packet import register_packet_tools
     from .perimeter import register_perimeter_tools
+    from .skills_tool import register_skill_tools
 
     register_scanner_tools(registry)
     register_fuzzer_tools(registry)
@@ -127,3 +128,4 @@ def _register_all_tools(registry: ToolRegistry):
     register_code_analysis_tools(registry)
     register_packet_tools(registry)
     register_perimeter_tools(registry)
+    register_skill_tools(registry)
