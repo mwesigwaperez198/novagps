@@ -21,6 +21,7 @@ from .watcher import NovaWatcher
 from .llm import NovaLLM
 from .engine import get_engine
 from .tools import get_registry, ToolRegistry
+from .system_context import SystemContext
 
 logger = logging.getLogger("nova_core.brain")
 
@@ -215,6 +216,7 @@ class NovaBrain:
         self.memory = NovaMemory()
         self.enforcer = NovaEnforcer(self.memory)
         self.watcher = NovaWatcher(self.memory)
+        self.system_context = SystemContext(self.memory)
         self.tools = get_registry()
         self.llm = NovaLLM()
         self.engine = get_engine()
@@ -247,6 +249,8 @@ class NovaBrain:
 
         recent_lessons = self.memory.get_recent_lessons(limit=10)
         system_state = self.watcher.get_current_snapshot()
+        system_state["system_map"] = self.system_context.overview()
+        system_state["active_goals"] = self.memory.list_goals("active")[:10]
         pending_alerts = self.memory.get_alerts(acknowledged=False, limit=5)
 
         results = {}

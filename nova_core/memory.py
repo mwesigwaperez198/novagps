@@ -91,6 +91,16 @@ class NovaMemory:
                 acknowledged INTEGER DEFAULT 0,
                 created_at TEXT DEFAULT (datetime('now'))
             );
+            CREATE TABLE IF NOT EXISTS goals (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                priority TEXT NOT NULL DEFAULT 'normal',
+                status TEXT NOT NULL DEFAULT 'active',
+                success_criteria TEXT NOT NULL DEFAULT '',
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
         """)
         self._migrate_lessons_engine_column(conn)
         conn.commit()
@@ -239,6 +249,33 @@ class NovaMemory:
     def acknowledge_alert(self, alert_id: int):
         with self.transaction() as conn:
             conn.execute("UPDATE alerts SET acknowledged = 1 WHERE id = ?", (alert_id,))
+
+    def create_goal(self, goal_id: str, title: str, description: str, priority: str, success_criteria: str) -> dict:
+        now = time.time()
+        with self.transaction() as conn:
+            conn.execute(
+                "INSERT INTO goals (id, title, description, priority, status, success_criteria, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, ?, ?)",
+                (goal_id, title, description, priority, success_criteria, now, now),
+            )
+        self.record_lesson("system_goal", f"Goal created: {title}", "LAU will track this goal in future context", success_criteria, tags="goals,queen")
+        return self.get_goal(goal_id) or {}
+
+    def get_goal(self, goal_id: str) -> Optional[dict]:
+        row = self._get_conn().execute("SELECT * FROM goals WHERE id = ?", (goal_id,)).fetchone()
+        return dict(row) if row else None
+
+    def list_goals(self, status: Optional[str] = None) -> List[dict]:
+        conn = self._get_conn()
+        rows = conn.execute("SELECT * FROM goals" + (" WHERE status = ?" if status else "") + " ORDER BY updated_at DESC", (status,) if status else ()).fetchall()
+        return [dict(row) for row in rows]
+
+    def update_goal(self, goal_id: str, status: str) -> Optional[dict]:
+        with self.transaction() as conn:
+            conn.execute("UPDATE goals SET status = ?, updated_at = ? WHERE id = ?", (status, time.time(), goal_id))
+        goal = self.get_goal(goal_id)
+        if goal:
+            self.record_lesson("system_goal", f"Goal {status}: {goal['title']}", "Goal ledger updated", goal["success_criteria"], tags="goals,queen")
+        return goal
 
     def _get_last_hash(self) -> str:
         conn = self._get_conn()

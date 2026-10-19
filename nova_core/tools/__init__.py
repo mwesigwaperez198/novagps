@@ -68,6 +68,17 @@ class ToolRegistry:
             for t in self._tools.values()
         ]
 
+    def readiness(self) -> List[dict]:
+        """Honest preflight: registered is not the same as executable."""
+        items = []
+        for tool in self._tools.values():
+            try:
+                detail = tool.preflight() if hasattr(tool, "preflight") else {"status": "not_verified"}
+            except Exception as exc:
+                detail = {"status": "unavailable", "reason": str(exc)}
+            items.append({"name": tool.name, "category": tool.category, **detail})
+        return items
+
     def list_by_category(self, category: str) -> List[dict]:
         return [
             {"name": t.name, "description": t.description}

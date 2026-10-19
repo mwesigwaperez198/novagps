@@ -177,6 +177,32 @@ class AuditLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
+class WatchlistStatus(str, enum.Enum):
+    watching = "watching"
+    sighted = "sighted"
+    recovered = "recovered"
+
+
+class Watchlist(Base):
+    __tablename__ = "watchlist"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    imei: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    imeisv: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    label: Mapped[str] = mapped_column(String(160), nullable=False, default="Stolen device")
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    model: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    manufacturer: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    carrier: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default=WatchlistStatus.watching.value)
+    first_sighted_device_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("devices.id", ondelete="SET NULL"), nullable=True)
+    first_sighted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
 class Alert(Base):
     __tablename__ = "alerts"
 

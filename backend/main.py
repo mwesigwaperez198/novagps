@@ -36,6 +36,8 @@ from models import (
     DeviceType,
     ImportedUser,
     Location,
+    Watchlist,
+    WatchlistStatus,
     recovery_id_str,
     utcnow,
 )
@@ -100,6 +102,15 @@ def startup_event() -> None:
 
     loop = asyncio.get_running_loop()
     bus.attach_loop(loop)
+    # The bridge must be created after FastAPI owns an event loop.  Creating it
+    # during module import would silently disable NOVA-CORE under Uvicorn.
+    if not getattr(app.state, "lau_event_bridge_started", False):
+        try:
+            from nova_core.event_bridge import start_event_bridge
+            app.state.lau_event_bridge = start_event_bridge(bus)
+            app.state.lau_event_bridge_started = True
+        except Exception as exc:
+            logger.warning("LAU event bridge unavailable: %s", exc)
     _maybe_start_keepalive(loop)
 
 
@@ -123,14 +134,16 @@ def _maybe_start_keepalive(loop: "asyncio.AbstractEventLoop") -> None:
 
 async def _keepalive_loop(url: str) -> None:
     import asyncio
+    import httpx
 
-    while True:
-        try:
-            with http_requests.get(url, timeout=10) as resp:
+    async with httpx.AsyncClient(timeout=10) as client:
+        while True:
+            try:
+                resp = await client.get(url)
                 logger.info("keepalive ping status=%s", resp.status_code)
-        except Exception as exc:
-            logger.warning("keepalive ping failed: %s", exc)
-        await asyncio.sleep(KEEPALIVE_INTERVAL)
+            except Exception as exc:
+                logger.warning("keepalive ping failed: %s", exc)
+            await asyncio.sleep(KEEPALIVE_INTERVAL)
 
 
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9_.:@-]{3,160}$")
@@ -351,6 +364,10 @@ def create_audit(
             **kwargs,
         )
     )
+    bus.publish_threadsafe({
+        "event": "audit.created", "action": action, "actor": principal.subject,
+        "metadata": metadata or {}, "recorded_at": utcnow().isoformat(),
+    })
 
 
 def require_active_consent(db: Session, device: Device) -> None:
@@ -463,6 +480,47 @@ def safe_sql_identifier(value: str) -> str:
     if not SQL_IDENTIFIER_PATTERN.fullmatch(value):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unsafe SQL identifier: {value}")
     return value
+
+
+def _luhn_check_digit(base14: str) -> int:
+    total = 0
+    for pos, ch in enumerate(reversed(base14)):
+        digit = int(ch)
+        if pos % 2 == 0:
+            digit *= 2
+            if digit > 9:
+                digit -= 9
+        total += digit
+    return (10 - (total % 10)) % 10
+
+
+def normalize_imei(raw: str) -> tuple[str | None, str | None, bool]:
+    """Normalize an IMEI/IMEISV string.
+
+    Accepts a 15-digit IMEI (validated with Luhn) or a 16-digit IMEISV
+    (TAC + serial + SVN); the IMEISV is reduced to its 15-digit IMEI form.
+    Returns (imei, imeisv, valid) — valid is True when the Luhn check passes.
+    """
+    digits = re.sub(r"[^\d]", "", raw or "")
+    imeisv: str | None = None
+    if len(digits) == 16:
+        imeisv = digits
+        base14 = digits[:14]
+        candidate = base14 + str(_luhn_check_digit(base14))
+        return candidate, imeisv, True
+    if len(digits) == 15:
+        return digits, None, digits[-1] == str(_luhn_check_digit(digits[:14]))
+    return None, imeisv, False
+
+
+_TAC_TABLE = {
+    "35575853": ("Samsung", "Galaxy A06 (SM-A065F/DS)"),
+}
+
+
+def tac_lookup(imei: str) -> tuple[str | None, str | None]:
+    tac = (imei or "")[:8]
+    return _TAC_TABLE.get(tac, (None, None))
 
 
 @app.get("/health")
@@ -613,6 +671,74 @@ def verify_consent_chain(
     return blockchain_anchor.verify_chain(db, start, limit)
 
 
+def _watchlist_hit(db: Session, device: Device, payload: LocationUpdateRequest) -> dict[str, Any] | None:
+    """Check a fresh location ingest against the stolen-device watchlist.
+
+    Matches the device's IMEI/identifier/phone against every active watch entry.
+    On a first hit the entry is marked sighted (device id + timestamp) and a
+    critical alert is queued. Returns the sighting dict for the ingest response.
+    """
+    candidates: set[str] = set()
+    for value in (device.imei, device.identifier, device.phone, payload.identifier):
+        if isinstance(value, str) and value.strip():
+            candidates.add(value.strip())
+    raw_imei = (payload.raw_payload or {}).get("imei")
+    if isinstance(raw_imei, str) and raw_imei.strip():
+        candidates.add(raw_imei.strip())
+    normalized = {c for c in candidates if c}
+    normalized_imeis: set[str] = set()
+    for value in normalized:
+        resolved, _, _ = normalize_imei(value) if re.fullmatch(r"\d{14,16}", value) else (None, None, False)
+        if resolved:
+            normalized_imeis.add(resolved)
+    entries = (
+        db.query(Watchlist)
+        .filter(Watchlist.status != WatchlistStatus.recovered.value)
+        .all()
+    )
+    hit: Watchlist | None = None
+    for entry in entries:
+        if entry.imei and (entry.imei in normalized or entry.imei in normalized_imeis):
+            hit = entry
+            break
+        if entry.imeisv and entry.imeisv in normalized:
+            hit = entry
+            break
+        if entry.phone and any(entry.phone[-9:] == n[-9:] for n in normalized if len(n) >= 9):
+            hit = entry
+            break
+    if hit is None:
+        return None
+    first_sight = hit.first_sighted_at is None
+    if first_sight:
+        hit.first_sighted_device_id = device.id
+        hit.first_sighted_at = utcnow()
+        hit.status = WatchlistStatus.sighted.value
+        db.add(
+            Alert(
+                device_id=device.id,
+                alert_type="watchlist_sighting",
+                severity="critical",
+                title=f"Watchlisted device sighted: {hit.label}",
+                message=(
+                    f"IMEI {hit.imei or 'n/a'} matched a device reporting at "
+                    f"{payload.latitude:.6f}, {payload.longitude:.6f} "
+                    f"({payload.place_name or 'place unresolved'})."
+                ),
+                metadata_json={"watchlist_id": hit.id, "imei": hit.imei, "phone": hit.phone},
+            )
+        )
+    return {
+        "watchlist_id": hit.id,
+        "label": hit.label,
+        "imei": hit.imei,
+        "status": hit.status,
+        "first_sighting": first_sight,
+        "latitude": payload.latitude,
+        "longitude": payload.longitude,
+    }
+
+
 @app.post("/update-location", status_code=status.HTTP_202_ACCEPTED)
 def update_location(
     payload: LocationUpdateRequest,
@@ -666,6 +792,9 @@ def update_location(
         "received_at": location.received_at.isoformat(),
     }
     kafka_published = publish_location_event(event)
+    sighting = _watchlist_hit(db, device, payload)
+    if sighting is not None:
+        db.commit()
     if settings.database_is_sqlite:
         from worker.geofence import check_event_against_geofences_local
 
@@ -673,7 +802,10 @@ def update_location(
             "geofence matches=%s",
             check_event_against_geofences_local(device.id, payload.longitude, payload.latitude),
         )
-    return {"status": "accepted", "location_id": location.id, "place_name": place_name, "ip_address": ip_address, "kafka_published": kafka_published}
+    response: dict[str, Any] = {"status": "accepted", "location_id": location.id, "place_name": place_name, "ip_address": ip_address, "kafka_published": kafka_published}
+    if sighting is not None:
+        response["watchlist"] = sighting
+    return response
 
 
 @app.post("/device/locate", status_code=status.HTTP_202_ACCEPTED)
@@ -2072,6 +2204,119 @@ def vehicle_active_recoveries(
     return {"recoveries": result}
 
 
+@app.post("/watchlist", status_code=status.HTTP_201_CREATED)
+def watchlist_add(
+    imei: str = Query("", max_length=32),
+    phone: str = Query("", max_length=64),
+    email: str = Query("", max_length=320),
+    label: str = Query("Stolen device", min_length=1, max_length=160),
+    notes: str = Query("", max_length=2000),
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict[str, Any]:
+    normalized_imei, imeisv, luhn_ok = normalize_imei(imei) if imei else (None, None, False)
+    if imei and normalized_imei is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="IMEI must be 15 digits (IMEI) or 16 digits (IMEISV)",
+        )
+    manufacturer = model = carrier = None
+    if normalized_imei:
+        manufacturer, model = tac_lookup(normalized_imei)
+    if phone:
+        intel = osint.phone_lookup(phone)
+        carrier = intel.get("carrier")
+        if carrier == "Unknown":
+            carrier = None
+    entry = Watchlist(
+        imei=normalized_imei,
+        imeisv=imeisv,
+        phone=phone or None,
+        email=email or None,
+        label=label,
+        notes=notes or None,
+        manufacturer=manufacturer,
+        model=model,
+        carrier=carrier,
+    )
+    db.add(entry)
+    create_audit(db, principal, "watchlist.add", {"imei": normalized_imei, "label": label})
+    db.commit()
+    db.refresh(entry)
+    return {
+        "watchlist_id": entry.id,
+        "imei": entry.imei,
+        "imei_input": imei,
+        "imei_luhn_valid": luhn_ok,
+        "imeisv": entry.imeisv,
+        "phone": entry.phone,
+        "email": entry.email,
+        "label": entry.label,
+        "manufacturer": manufacturer,
+        "model": model,
+        "carrier": carrier,
+        "status": entry.status,
+        "created_at": entry.created_at.isoformat(),
+    }
+
+
+@app.get("/watchlist")
+def watchlist_list(
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(require_roles("viewer", "operator", "admin")),
+) -> list[dict[str, Any]]:
+    entries = db.query(Watchlist).order_by(Watchlist.created_at.desc()).limit(200).all()
+    return [
+        {
+            "id": e.id,
+            "imei": e.imei,
+            "imeisv": e.imeisv,
+            "phone": e.phone,
+            "email": e.email,
+            "label": e.label,
+            "notes": e.notes,
+            "manufacturer": e.manufacturer,
+            "model": e.model,
+            "carrier": e.carrier,
+            "status": e.status,
+            "first_sighted_device_id": e.first_sighted_device_id,
+            "first_sighted_at": e.first_sighted_at.isoformat() if e.first_sighted_at else None,
+            "created_at": e.created_at.isoformat(),
+        }
+        for e in entries
+    ]
+
+
+@app.delete("/watchlist/{watch_id}")
+def watchlist_remove(
+    watch_id: str,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict[str, str]:
+    entry = db.get(Watchlist, watch_id)
+    if not entry:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Watchlist entry not found")
+    db.delete(entry)
+    create_audit(db, principal, "watchlist.remove", {"watchlist_id": watch_id})
+    db.commit()
+    return {"status": "removed", "watchlist_id": watch_id}
+
+
+@app.post("/watchlist/{watch_id}/recover")
+def watchlist_mark_recovered(
+    watch_id: str,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(require_roles("operator", "admin")),
+) -> dict[str, str]:
+    entry = db.get(Watchlist, watch_id)
+    if not entry:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Watchlist entry not found")
+    entry.status = WatchlistStatus.recovered.value
+    create_audit(db, principal, "watchlist.recover", {"watchlist_id": watch_id})
+    db.commit()
+    return {"status": "recovered", "watchlist_id": watch_id}
+
+
 @app.get("/camera/stream/{camera_id}")
 def camera_stream_proxy(
     camera_id: str,
@@ -2572,7 +2817,10 @@ try:
     _nova_log.info("nova-core routes registered")
 
     from nova_core.engine import get_engine
-    get_engine().start_async()
+    try:
+        get_engine().start_async()
+    except Exception as _eng_exc:
+        _nova_log.warning("nova-core engine start skipped: %s", _eng_exc)
 
     from nova_core.config import get_config
     if get_config().watch_enabled:

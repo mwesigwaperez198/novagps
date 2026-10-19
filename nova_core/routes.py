@@ -694,6 +694,9 @@ _INTENT_MAP = [
                              "device detail", "device info"]),
     ("camera_discover", ["discover camera", "find camera", "ip camera", "scan camera",
                           "camera scan", "nearby camera"]),
+    ("stolen_track", ["stolen phone", "phone stolen", "stolen device", "track stolen phone",
+                       "watch imei", "imei watch", "stolen imei", "phone was stolen",
+                       "my phone was stolen", "track my phone", "register stolen"]),
     ("vehicle_track", ["vehicle", "track car", "track vehicle", "stolen vehicle",
                         "car track", "vehicle track"]),
     ("shield_validate", ["shield validate", "run validator", "all lanes", "test shield",
@@ -756,8 +759,8 @@ def _grounding_steps(command: str, intent: dict) -> list:
     informative = {"system_health", "lau_status", "device_enum", "process_list", "network_info"}
     acting = {"port_scan", "vuln_scan", "dns_resolve", "traceroute", "device_locate",
               "device_lock", "device_wipe", "device_message", "device_fingerprint",
-              "camera_discover", "vehicle_track", "shield_validate", "full_scan",
-              "bandwidth", "mtu_test"}
+              "camera_discover", "vehicle_track", "stolen_track", "shield_validate",
+              "full_scan", "bandwidth", "mtu_test"}
     how = (
         "asking for live status"
         if cat in informative
@@ -950,6 +953,53 @@ async def run_dispatch(command: str, device_id: str = "") -> dict:
             "intent": intent["category"],
             "response": "Scanning the local network for IP cameras and RTSP streams...",
             "action": _action("GET", "/camera/discover?subnet=192.168.1.0/24"),
+        }
+
+    if intent["category"] == "stolen_track":
+        imei_match = re.search(r"\b\d{14,16}\b", command)
+        email_match = re.search(r"[^@\s]+@[^@\s]+\.[^@\s]+", command)
+        phone_match = re.search(r"(?:\+?256|0)\d{9}\b", command)
+        imei = imei_match.group(0) if imei_match else ""
+        email = email_match.group(0) if email_match else ""
+        phone = phone_match.group(0) if phone_match else ""
+        if not imei and not phone:
+            return {
+                "thought_process": thought + ["No IMEI or phone number found in the command"],
+                "intent": intent["category"],
+                "response": (
+                    "To open a stolen-device watch I need the handset IMEI (15 or 16 digits) "
+                    "or at least the phone number. Example: \"stolen phone IMEI 3557585351455373\"."
+                ),
+            }
+        label = f"Stolen phone {imei or phone}"
+        from urllib.parse import quote
+
+        params = [f"label={quote(label)}"]
+        if imei:
+            params.append(f"imei={quote(imei)}")
+        if phone:
+            params.append(f"phone={quote(phone)}")
+        if email:
+            params.append(f"email={quote(email)}")
+        parsed = ", ".join(
+            part for part in (
+                f"IMEI {imei}" if imei else "",
+                f"phone {phone}" if phone else "",
+                f"email {email}" if email else "",
+            ) if part
+        )
+        return {
+            "thought_process": thought + [
+                f"Parsed the target: {parsed}.",
+                "Opening a stolen-device watch so any future sighting raises a critical alert.",
+            ],
+            "intent": intent["category"],
+            "response": (
+                f"Parsed {parsed}. Registering a stolen-device watch — once it is on the "
+                "watchlist the backend resolves the TAC (make/model) and carrier, and any "
+                "device report that matches the IMEI or phone raises a critical sighting alert."
+            ),
+            "action": _action("POST", f"/watchlist?{'&'.join(params)}", risk="high"),
         }
 
     if intent["category"] == "vehicle_track":

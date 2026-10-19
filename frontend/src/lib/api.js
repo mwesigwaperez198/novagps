@@ -70,6 +70,14 @@ export const api = {
   novaShieldValidate: () => request("/nova-core/shield/validate", { method: "POST" }),
   novaShieldEmit: (prompt) => request("/nova-core/shield/emit", { method: "POST", body: JSON.stringify({ prompt }) }),
   novaAgentDispatch: (command, deviceId = "") => request("/nova-core/agent/dispatch", { method: "POST", body: JSON.stringify({ command, device_id: deviceId }) }),
+  novaSystemContext: () => request("/nova-core/context/system"),
+  novaActionOutcome: (payload) => request("/nova-core/actions/outcome", { method: "POST", body: JSON.stringify(payload) }),
+  novaToolReadiness: () => request("/nova-core/tools/readiness"),
+  novaGoals: (status = "") => request(`/nova-core/goals${status ? `?status=${encodeURIComponent(status)}` : ""}`),
+  novaCreateGoal: (payload) => request("/nova-core/goals", { method: "POST", body: JSON.stringify(payload) }),
+  novaCompleteGoal: (goalId) => request(`/nova-core/goals/${encodeURIComponent(goalId)}/complete`, { method: "POST" }),
+  novaProposeChange: (payload) => request("/nova-core/changes/propose", { method: "POST", body: JSON.stringify(payload) }),
+  novaApproveChange: (proposalId) => request(`/nova-core/changes/${encodeURIComponent(proposalId)}/approve`, { method: "POST", body: JSON.stringify({ confirmation: "APPLY" }) }),
   cameraDiscover: (subnet) => request(`/camera/discover?subnet=${encodeURIComponent(subnet)}`),
   cameraScreenshot: (rtspUrl) => request(`/camera/screenshot?rtsp_url=${encodeURIComponent(rtspUrl)}`, { method: "POST" }),
   cameraRecord: (rtspUrl, duration = 30) => request(`/camera/record?rtsp_url=${encodeURIComponent(rtspUrl)}&duration=${duration}`, { method: "POST" }),
@@ -165,6 +173,19 @@ export const api = {
     return request(`/alerts?${params}`);
   },
   alertAcknowledge: (alertId) => request(`/alerts/${encodeURIComponent(alertId)}/acknowledge`, { method: "POST" }),
+
+  // Stolen-device watchlist
+  watchlistList: () => request("/watchlist"),
+  watchlistAdd: ({ imei = "", phone = "", email = "", label = "Stolen device", notes = "" }) => {
+    const params = new URLSearchParams({ label });
+    if (imei) params.set("imei", imei);
+    if (phone) params.set("phone", phone);
+    if (email) params.set("email", email);
+    if (notes) params.set("notes", notes);
+    return request(`/watchlist?${params}`, { method: "POST" });
+  },
+  watchlistRemove: (watchId) => request(`/watchlist/${encodeURIComponent(watchId)}`, { method: "DELETE" }),
+  watchlistRecover: (watchId) => request(`/watchlist/${encodeURIComponent(watchId)}/recover`, { method: "POST" }),
 
   // Scheduled tasks
   taskSchedule: (name, cronExpr, commandId = "") =>

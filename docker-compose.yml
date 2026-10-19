@@ -1,4 +1,8 @@
 x-nova-env: &nova-env
+  DATA_DIR: ${DATA_DIR:-/var/data}
+  NOVA_DATA_DIR: ${DATA_DIR:-/var/data}
+  NOVA_PROJECT_ROOT: /app
+  NOVA_BACKEND_DIR: /app
   DATABASE_URL: ${DATABASE_URL:-postgresql://nova_admin:strongpassword@postgres:5432/nova_gps}
   POSTGRES_USER: ${POSTGRES_USER:-nova_admin}
   POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-strongpassword}
@@ -92,7 +96,8 @@ services:
 
   backend-api:
     build:
-      context: ./backend
+      context: .
+      dockerfile: backend/Dockerfile
     container_name: nova_backend_api
     restart: unless-stopped
     command: >
@@ -103,6 +108,8 @@ services:
       SERVICE_NAME: backend-api
     volumes:
       - ./backend:/app
+      - ./nova_core:/app/nova_core
+      - nova_data:/var/data
     ports:
       - "8000:8000"
     depends_on:
@@ -113,7 +120,8 @@ services:
 
   worker:
     build:
-      context: ./backend
+      context: .
+      dockerfile: backend/Dockerfile
     container_name: nova_worker
     restart: unless-stopped
     command: python kafka_consumer.py
@@ -122,13 +130,16 @@ services:
       SERVICE_NAME: worker
     volumes:
       - ./backend:/app
+      - ./nova_core:/app/nova_core
+      - nova_data:/var/data
     depends_on:
       backend-api:
         condition: service_started
 
   kafka-to-ws:
     build:
-      context: ./backend
+      context: .
+      dockerfile: backend/Dockerfile
     container_name: nova_kafka_to_ws
     restart: unless-stopped
     command: python kafka_to_ws.py
@@ -139,6 +150,8 @@ services:
       WS_PORT: 8765
     volumes:
       - ./backend:/app
+      - ./nova_core:/app/nova_core
+      - nova_data:/var/data
     ports:
       - "8765:8765"
     depends_on:
@@ -147,7 +160,8 @@ services:
 
   mqtt-consumer:
     build:
-      context: ./backend
+      context: .
+      dockerfile: backend/Dockerfile
     container_name: nova_mqtt_consumer
     restart: unless-stopped
     command: python mqtt_consumer.py
@@ -156,14 +170,16 @@ services:
       SERVICE_NAME: mqtt-consumer
     volumes:
       - ./backend:/app
+      - ./nova_core:/app/nova_core
+      - nova_data:/var/data
     depends_on:
       - mosquitto
       - backend-api
 
   command-executor:
     build:
-      context: ./backend
-      dockerfile: sandbox.Dockerfile
+      context: .
+      dockerfile: backend/sandbox.Dockerfile
     container_name: nova_command_executor
     profiles: ["sandbox"]
     command: "printf 'nova-sandbox-runner=ready\\n'"
@@ -225,3 +241,4 @@ services:
 volumes:
   postgres_data:
   grafana_data:
+  nova_data:

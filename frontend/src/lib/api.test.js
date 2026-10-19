@@ -196,4 +196,51 @@ describe("api.js", () => {
     expect(options.method).toBe("POST");
     expect(JSON.parse(options.body).prompt).toContain("$GPRMC");
   });
+
+  it("watchlistAdd posts IMEI, phone and email as query params", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ watchlist_id: "w1", imei: "355758530001233", status: "watching" }),
+    });
+    const { api } = await import("./api.js");
+    const result = await api.watchlistAdd({
+      imei: "3557585300012301",
+      phone: "+256770000000",
+      email: "client@example.com",
+      label: "Stolen phone",
+    });
+    expect(result.watchlist_id).toBe("w1");
+    const [url, options] = mockFetch.mock.calls[0];
+    expect(options.method).toBe("POST");
+    expect(url).toContain("/watchlist?");
+    expect(url).toContain("imei=3557585300012301");
+    expect(url).toContain("phone=%2B256770000000");
+    expect(url).toContain("email=client%40example.com");
+  });
+
+  it("watchlistList calls GET /watchlist", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => [{ id: "w1", status: "watching" }],
+    });
+    const { api } = await import("./api.js");
+    const result = await api.watchlistList();
+    expect(result).toHaveLength(1);
+    expect(mockFetch.mock.calls[0][0]).toContain("/watchlist");
+    expect(mockFetch.mock.calls[0][1].method).toBeUndefined();
+  });
+
+  it("watchlistRemove sends DELETE", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ status: "removed", watchlist_id: "w1" }),
+    });
+    const { api } = await import("./api.js");
+    const result = await api.watchlistRemove("w1");
+    expect(result.status).toBe("removed");
+    expect(mockFetch).toHaveBeenCalledWith(
+      expect.stringContaining("/watchlist/w1"),
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
 });

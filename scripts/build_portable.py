@@ -109,6 +109,13 @@ def copy_app(portable_dir):
         elif item.is_dir() and item.name not in ("__pycache__", ".pytest_cache"):
             shutil.copytree(item, app_backend / item.name, dirs_exist_ok=True)
 
+    # LAU is part of the application, not an optional desktop extra.  Keep the
+    # same cognitive core and system map in USB/live deployments.
+    core_source = ROOT / "nova_core"
+    if core_source.exists():
+        shutil.copytree(core_source, app_dir / "nova_core", dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache"))
+
     # Copy frontend dist
     frontend_dist = FRONTEND / "dist"
     if frontend_dist.exists():

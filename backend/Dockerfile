@@ -10,10 +10,11 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends gcc libpq-dev curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt /app/requirements.txt
+COPY backend/requirements.txt /app/requirements.txt
 RUN pip install --upgrade pip && pip install -r /app/requirements.txt
 
-COPY . /app
+COPY backend/ /app/
+COPY nova_core/ /app/nova_core/
 
 EXPOSE 8000
 

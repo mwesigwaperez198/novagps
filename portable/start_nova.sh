@@ -25,7 +25,10 @@ export NOVA_MODE=portable
 export ENVIRONMENT=development
 export DATA_DIR
 export DATABASE_URL="sqlite:///$DATA_DIR/nova.sqlite3"
-export PYTHONPATH="$ROOT/app/backend"
+export NOVA_PROJECT_ROOT="$ROOT/app"
+export NOVA_BACKEND_DIR="$ROOT/app/backend"
+export NOVA_VAULT_DIR="$DATA_DIR/nova_vault"
+export PYTHONPATH="$ROOT/app:$ROOT/app/backend"
 export PATH="$ROOT/runtime/$RUNTIME/python/bin:$PATH"
 
 cd "$ROOT/app/backend"

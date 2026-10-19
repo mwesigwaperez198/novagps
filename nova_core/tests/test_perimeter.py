@@ -240,3 +240,37 @@ class TestDeterministicRouting:
         from nova_core.brain import NovaBrain
         parsed = NovaBrain()._parse_request("show me the tracking logic for location of devices")
         assert "location_engine" in [a["tool"] for a in parsed["actions"]]
+
+class TestStolenTrackIntent:
+    def test_stolen_phone_with_imei_builds_watchlist_action(self, tmp_path, monkeypatch):
+        machine = LauSovereignStateMachine(store=str(tmp_path / "stolen.json"))
+        machine.reset()
+        monkeypatch.setattr(routes, "_get_provision_machine", lambda: machine)
+        out = run_dispatch(
+            "my phone was stolen, track it. IMEI 3557585300012301 "
+            "number +256770000000 email client@example.com"
+        )
+        assert out["intent"] == "stolen_track"
+        action = out["action"]
+        assert action["method"] == "POST"
+        assert action["endpoint"].startswith("/watchlist?")
+        assert "imei=3557585300012301" in action["endpoint"]
+        assert "phone=%2B256770000000" in action["endpoint"]
+        assert "email=client%40example.com" in action["endpoint"]
+        assert action["requires_confirmation"] is True
+
+    def test_stolen_phone_without_target_asks_for_imei(self, tmp_path, monkeypatch):
+        machine = LauSovereignStateMachine(store=str(tmp_path / "stolen-empty.json"))
+        machine.reset()
+        monkeypatch.setattr(routes, "_get_provision_machine", lambda: machine)
+        out = run_dispatch("my phone was stolen")
+        assert out["intent"] == "stolen_track"
+        assert "action" not in out
+        assert "IMEI" in out["response"]
+
+    def test_stolen_vehicle_still_routes_to_vehicle_lane(self, tmp_path, monkeypatch):
+        machine = LauSovereignStateMachine(store=str(tmp_path / "stolen-car.json"))
+        machine.reset()
+        monkeypatch.setattr(routes, "_get_provision_machine", lambda: machine)
+        out = run_dispatch("track the stolen vehicle")
+        assert out["intent"] == "vehicle_track"

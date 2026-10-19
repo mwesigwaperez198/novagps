@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 
 from .config import get_config
 from .memory import NovaMemory
+from .system_context import SystemContext
 
 logger = logging.getLogger("nova_core.watcher")
 
@@ -37,6 +38,7 @@ class NovaWatcher:
     def __init__(self, memory: Optional[NovaMemory] = None):
         self.cfg = get_config()
         self.memory = memory or NovaMemory()
+        self.system_context = SystemContext(self.memory)
         self.state = WatcherState()
         self._running = False
         self._callbacks: List[Callable] = []
@@ -108,12 +110,14 @@ class NovaWatcher:
         self._check_engine_state()
         self._learn_from_probes()
         self._audit_memory_chain()
+        codebase = self.system_context.observe()
 
         self.memory.set_state("last_watch_snapshot", json.dumps({
             "timestamp": snapshot["timestamp"],
             "anomaly_count": len(anomalies),
             "health": "ok" if not anomalies else "degraded",
         }))
+        self.memory.set_state("last_codebase_observation", json.dumps(codebase))
 
     def _check_system_health(self) -> dict:
         info = {"load_avg": [0, 0, 0], "uptime": 0, "memory_percent": 0}

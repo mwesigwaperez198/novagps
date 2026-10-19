@@ -10,6 +10,7 @@ const QUICK_ACTIONS = [
   { id: "fingerprint", label: "Fingerprint", cmd: "fingerprint the connected device" },
   { id: "locate", label: "Locate Device", cmd: "locate the connected device" },
   { id: "track", label: "Track Vehicle", cmd: "track the vehicle" },
+  { id: "stolen", label: "Stolen Phone", cmd: "track my stolen phone" },
   { id: "shield", label: "Shield Validate", cmd: "run all shield validators" },
   { id: "vuln", label: "Vuln Scan", cmd: "run vulnerability scan" },
   { id: "dns", label: "DNS Resolve", cmd: "resolve dns for google.com" },
@@ -39,6 +40,19 @@ export default function LAUHud({ isOpen, onClose, deviceId = "" }) {
 
   const executeAction = useCallback(async (action) => {
     if (!action?.endpoint) return;
+    if (action.requiresTypedConfirmation) {
+      const confirmation = window.prompt("This is destructive. Type WIPE to authorize LAU to continue.");
+      if (confirmation !== "WIPE") {
+        setLogs((prev) => [...prev, {
+          id: Date.now(), timestamp: new Date().toLocaleTimeString("en-GB", { hour12: false }),
+          engine: "EXECUTIVE_ACTION", thoughtProcess: null,
+          outputPayload: { verdict: "ACTION_CANCELLED", actionEnforced: "Typed confirmation was not accepted.", frontendBadgeColor: "CRITICAL_RED_FLASH" }, rawResult: null,
+        }]);
+        return;
+      }
+    } else if (action.requiresConfirmation && !window.confirm(`Authorize LAU to run ${action.method} ${action.endpoint}?`)) {
+      return;
+    }
     setLoading(true);
     try {
       const opts = { method: action.method };
@@ -52,6 +66,13 @@ export default function LAUHud({ isOpen, onClose, deviceId = "" }) {
       }
       const isGet = action.method === "GET";
       const data = await request(endpoint, isGet ? {} : opts);
+      // The result—not merely the request—becomes a durable LAU lesson.
+      api.novaActionOutcome({
+        method: action.method,
+        endpoint: action.endpoint,
+        success: true,
+        detail: JSON.stringify(data).slice(0, 500),
+      }).catch(() => {});
       setLogs((prev) => [...prev, {
         id: Date.now(),
         timestamp: new Date().toLocaleTimeString("en-GB", { hour12: false }),
@@ -65,6 +86,12 @@ export default function LAUHud({ isOpen, onClose, deviceId = "" }) {
         rawResult: data,
       }]);
     } catch (err) {
+      api.novaActionOutcome({
+        method: action.method,
+        endpoint: action.endpoint,
+        success: false,
+        detail: err.message,
+      }).catch(() => {});
       setLogs((prev) => [...prev, {
         id: Date.now(),
         timestamp: new Date().toLocaleTimeString("en-GB", { hour12: false }),
@@ -184,7 +211,7 @@ export default function LAUHud({ isOpen, onClose, deviceId = "" }) {
                   onClick={() => executeAction(log.action)}
                   type="button"
                 >
-                  EXECUTE {log.action.method} {log.action.endpoint}
+                  {log.action.risk === "destructive" ? "AUTHORIZE DESTRUCTIVE" : "EXECUTE"} {log.action.method} {log.action.endpoint}
                 </button>
               )}
               {log.rawResult && (
@@ -219,7 +246,7 @@ export default function LAUHud({ isOpen, onClose, deviceId = "" }) {
       </div>
 
       <div className="lau-hud-actions-row">
-        {QUICK_ACTIONS.slice(0, 8).map((a) => (
+        {QUICK_ACTIONS.slice(0, 9).map((a) => (
           <button
             key={a.id}
             className="lau-hud-chip"

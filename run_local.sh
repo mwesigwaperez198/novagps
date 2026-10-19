@@ -14,6 +14,9 @@ export NOVA_MODE=portable
 export ENVIRONMENT=development
 export DATA_DIR="$ROOT/backend/data"
 export DATABASE_URL="sqlite:///$DATA_DIR/nova.sqlite3"
+export NOVA_PROJECT_ROOT="$ROOT"
+export NOVA_BACKEND_DIR="$ROOT/backend"
+export NOVA_VAULT_DIR="$DATA_DIR/nova_vault"
 
 cd "$ROOT/backend"
 echo "[NOVA] Dashboard: http://127.0.0.1:8000 (Ctrl+C to stop)"
