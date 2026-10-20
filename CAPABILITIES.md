@@ -166,6 +166,63 @@ Consent records are anchored to a simulated blockchain (SHA-256 hash chain).
 
 ---
 
+## LAU Cloud Research (read-only)
+
+LAU can consult public sources when the local toolset cannot answer a question
+(vendor docs, CVEs, install steps, current versions, general how-to). This is a
+read-only capability and it is deliberately narrow.
+
+| Endpoint / Tool | Method | Description |
+|---|---|---|
+| `POST /nova-core/agent/dispatch` | POST | Any question; LAU may run `cloud_research` and cite sources |
+| `GET /nova-core/cloud/status` | GET | Provider readiness (provider, key configured?) |
+| `cloud_research` tool | — | Search + fetch the top pages, return titles, URLs, excerpts |
+| `web_search` tool | — | Search only; return titles, URLs, snippets |
+| `fetch_url` tool | — | Fetch one public page as plain text |
+
+Constraints, enforced in code (`nova_core/cloud.py`):
+
+- **GET only.** The single POST exception is a search-provider API call, which
+  carries the query and nothing else. No cookies, no credentials, no referer,
+  no device data, no telemetry ever leave the host.
+- **SSRF guard.** Scheme (http/https), port (80/443), host shape, and every
+  resolved address are checked before the request, on each redirect, and at the
+  socket — loopback, RFC1918, link-local, and the cloud metadata address
+  `169.254.169.254` are refused. URLs with embedded credentials are refused.
+- **robots.txt** is fetched and honoured for page reads.
+- Bodies are content-type restricted and size-capped; `<script>`/`<style>` and
+  other active markup are stripped before the text reaches the model.
+- **Fetched content is untrusted data, never instructions.** LAU quotes it and
+  cites the URL; it never executes commands, scripts, or "ignore instructions"
+  text found on a page. Cloud-derived commands are never auto-run.
+- Provider chain, degrading safely: Brave/Tavily/Serper (on `NOVA_SEARCH_API_KEY`)
+  → self-hosted SearXNG (on `NOVA_SEARCH_BASE_URL`) → keyless DuckDuckGo Instant
+  Answer + Wikipedia. A failed provider falls through to the next.
+
+Config (all optional; sensible defaults): `NOVA_CLOUD_RESEARCH=1`,
+`NOVA_CLOUD_MAX_SOURCES=3`, `NOVA_CLOUD_TIMEOUT=20`, `NOVA_CLOUD_MAX_BYTES`,
+`NOVA_SEARCH_PROVIDER`, `NOVA_SEARCH_API_KEY`, `NOVA_SEARCH_BASE_URL`.
+
+### What "outside the sandbox" actually means
+
+The Render container is not what blocks the internet — outbound HTTPS already
+works (the hosted model, package downloads, and cloud research all use it). What
+the platform will not grant a public web service is **raw-socket privilege**
+(`CAP_NET_RAW`) and an **unrestricted shell**. Giving the internet-facing API a
+generic shell would be a remote-code-execution backdoor, so that is refused by
+design.
+
+The safe way to reach host/raw-socket capabilities is a **probe companion**: a
+small agent the operator runs on a machine they control (a home server, a lab
+box, a phone), which connects *outbound* to NOVA and executes an explicit,
+allow-listed set of probes. The public API only ever sends it named tasks
+(`masscan`, a raw SYN scan, an ARP sweep) and reads back structured results —
+never a shell string. Until that companion is running, LAU on Render uses the
+unprivileged equivalents (`nmap -sT`, connect scans) and says plainly when a
+capability needs the companion.
+
+---
+
 ## Penetration Testing
 
 | Endpoint | Method | Description |
