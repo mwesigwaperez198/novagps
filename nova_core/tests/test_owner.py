@@ -10,8 +10,12 @@ from nova_core import owner
 @pytest.fixture(autouse=True)
 def clean_sessions():
     owner.reset_all()
+    owner._MEMORY = None
+    owner._MEMORY_PATH = None
     yield
     owner.reset_all()
+    owner._MEMORY = None
+    owner._MEMORY_PATH = None
 
 
 @pytest.fixture
@@ -99,3 +103,35 @@ def test_command_during_verify_does_not_count_as_attempt(monkeypatch, cfg):
 def test_sessions_are_per_subject(monkeypatch, cfg):
     owner.handle_turn("I am Perez", subject="a", role="admin")
     assert owner.status("b")["session"] is False
+
+
+def test_session_persists_in_the_vault(tmp_path, monkeypatch):
+    """The verified flag must survive a fresh orchestrator/process."""
+    from nova_core import config as config_module
+    from nova_core import memory as memory_module
+
+    config_module._config = None
+    monkeypatch.setenv("NOVA_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("NOVA_VAULT_DIR", raising=False)
+    monkeypatch.delenv("NOVA_MEMORY_DB", raising=False)
+    monkeypatch.setenv("NOVA_OWNER_NAME", "Perez")
+    monkeypatch.setenv("NOVA_OWNER_PHRASE", "23rd December")
+
+    cfg_obj = config_module.get_config()
+
+    owner.handle_turn("I am Perez", subject="persist@x", role="admin")
+    owner.handle_turn("yes", subject="persist@x", role="admin")
+    done = owner.handle_turn("23rd December", subject="persist@x", role="admin")
+    assert done["owner"]["verified"] is True
+
+    # Simulate a restart: drop every in-process cache and read the vault.
+    owner._MEMORY = None
+    owner._MEMORY_PATH = None
+    owner._SESSIONS.clear()
+    config_module._config = None
+
+    fresh_store = memory_module.NovaMemory(str(cfg_obj.memory_db))
+    row = fresh_store.get_owner_session("persist@x")
+    assert row is not None
+    assert row["verified"] == 1
+    assert row["stage"] == "verified"

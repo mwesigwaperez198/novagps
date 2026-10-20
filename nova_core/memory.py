@@ -101,6 +101,13 @@ class NovaMemory:
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS owner_sessions (
+                subject TEXT PRIMARY KEY,
+                stage TEXT NOT NULL DEFAULT 'confirm',
+                verified INTEGER NOT NULL DEFAULT 0,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                updated_at REAL NOT NULL
+            );
         """)
         self._migrate_lessons_engine_column(conn)
         conn.commit()
@@ -276,6 +283,40 @@ class NovaMemory:
         if goal:
             self.record_lesson("system_goal", f"Goal {status}: {goal['title']}", "Goal ledger updated", goal["success_criteria"], tags="goals,queen")
         return goal
+
+    def get_owner_session(self, subject: str) -> Optional[dict]:
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT * FROM owner_sessions WHERE subject = ?", (subject,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def set_owner_session(self, subject: str, stage: str, verified: bool, attempts: int) -> None:
+        with self.transaction() as conn:
+            conn.execute(
+                """INSERT INTO owner_sessions (subject, stage, verified, attempts, updated_at)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(subject) DO UPDATE SET
+                       stage = excluded.stage,
+                       verified = excluded.verified,
+                       attempts = excluded.attempts,
+                       updated_at = excluded.updated_at""",
+                (subject, stage, 1 if verified else 0, int(attempts), time.time()),
+            )
+
+    def clear_owner_session(self, subject: str) -> None:
+        with self.transaction() as conn:
+            conn.execute("DELETE FROM owner_sessions WHERE subject = ?", (subject,))
+
+    def clear_all_owner_sessions(self) -> None:
+        with self.transaction() as conn:
+            conn.execute("DELETE FROM owner_sessions")
+
+    def prune_owner_sessions(self, ttl_seconds: int) -> int:
+        cutoff = time.time() - max(60, int(ttl_seconds))
+        with self.transaction() as conn:
+            cur = conn.execute("DELETE FROM owner_sessions WHERE updated_at < ?", (cutoff,))
+            return cur.rowcount or 0
 
     def _get_last_hash(self) -> str:
         conn = self._get_conn()

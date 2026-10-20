@@ -34,6 +34,76 @@ _SESSIONS: dict[str, dict] = {}
 _MAX_ATTEMPTS = 3
 _ADMIN_ROLES = {"admin", "superadmin", "owner"}
 
+
+def _memory():
+    """The persistent session store, or None when only memory is available.
+
+    Owner sessions live in the SQLite vault so a verified owner stays verified
+    across worker restarts and redeploys. If the vault cannot be opened (pure
+    unit tests), we fall back to a process-local dict so the ritual still works.
+    The handle is re-created when the configured DB path changes so tests that
+    swap NOVA_DATA_DIR never read a stale vault.
+    """
+    try:
+        from .config import get_config
+        from .memory import NovaMemory
+
+        db_path = str(get_config().memory_db)
+        global _MEMORY, _MEMORY_PATH
+        if _MEMORY is None or _MEMORY_PATH != db_path:
+            _MEMORY = NovaMemory(db_path)
+            _MEMORY_PATH = db_path
+        return _MEMORY
+    except Exception:  # noqa: BLE001
+        return None
+
+
+_MEMORY = None
+_MEMORY_PATH = None
+
+
+def _load(subject: str) -> Optional[dict]:
+    store = _memory()
+    if store is not None:
+        try:
+            row = store.get_owner_session(subject)
+            if row:
+                return {
+                    "stage": row.get("stage", "confirm"),
+                    "verified": bool(row.get("verified")),
+                    "attempts": int(row.get("attempts") or 0),
+                    "updated": float(row.get("updated_at") or 0),
+                }
+            return None
+        except Exception:  # noqa: BLE001 — never let storage break the gate
+            pass
+    return _SESSIONS.get(subject)
+
+
+def _save(subject: str, session: dict) -> None:
+    session["updated"] = time.time()
+    store = _memory()
+    if store is not None:
+        try:
+            store.set_owner_session(
+                subject, session.get("stage", "confirm"),
+                bool(session.get("verified")), int(session.get("attempts", 0)),
+            )
+            return
+        except Exception:  # noqa: BLE001
+            pass
+    _SESSIONS[subject] = session
+
+
+def _drop(subject: str) -> None:
+    store = _memory()
+    if store is not None:
+        try:
+            store.clear_owner_session(subject)
+        except Exception:  # noqa: BLE001
+            pass
+    _SESSIONS.pop(subject, None)
+
 _YES_RE = re.compile(r"^(yes|yeah|yep|yup|sure|indeed|correct|right|i am|i'm|of course)[.! ]*$", re.I)
 _NO_RE = re.compile(r"^(no|nope|nah|not really|never)[.! ]*$", re.I)
 _CANCEL_RE = re.compile(r"^(cancel|stop|nevermind|never mind|abort)[.! ]*$", re.I)
@@ -71,9 +141,16 @@ def _is_admin(role: Optional[str]) -> bool:
     return str(role).strip().lower() in _ADMIN_ROLES
 
 
-def _prune_locked(now: float) -> None:
+def _prune(now: float) -> None:
     cfg = get_config()
     ttl = max(60, int(cfg.owner_session_ttl or 43200))
+    store = _memory()
+    if store is not None:
+        try:
+            store.prune_owner_sessions(ttl)
+            return
+        except Exception:  # noqa: BLE001
+            pass
     dead = [k for k, v in _SESSIONS.items() if now - v.get("updated", 0) > ttl]
     for k in dead:
         _SESSIONS.pop(k, None)
@@ -83,8 +160,8 @@ def status(subject: Optional[str] = None, role: Optional[str] = None) -> dict:
     cfg = get_config()
     now = time.time()
     with _LOCK:
-        _prune_locked(now)
-        session = _SESSIONS.get(_subject_key(subject))
+        _prune(now)
+        session = _load(_subject_key(subject))
         verified = bool(session and session.get("verified"))
     return {
         "verified": verified,
@@ -98,12 +175,18 @@ def status(subject: Optional[str] = None, role: Optional[str] = None) -> dict:
 
 def reset(subject: Optional[str] = None) -> None:
     with _LOCK:
-        _SESSIONS.pop(_subject_key(subject), None)
+        _drop(_subject_key(subject))
 
 
 def reset_all() -> None:
     with _LOCK:
         _SESSIONS.clear()
+        store = _memory()
+        if store is not None:
+            try:
+                store.clear_all_owner_sessions()
+            except Exception:  # noqa: BLE001
+                pass
 
 
 def handle_turn(
@@ -121,8 +204,8 @@ def handle_turn(
     key = _subject_key(subject)
     now = time.time()
     with _LOCK:
-        _prune_locked(now)
-        session = _SESSIONS.get(key)
+        _prune(now)
+        session = _load(key)
 
     # Non-admin principals can never claim ownership, and we say so plainly
     # rather than running the ritual.
@@ -159,12 +242,11 @@ def handle_turn(
                 note="already_verified",
             )
         with _LOCK:
-            _SESSIONS[key] = {
+            _save(key, {
                 "stage": "confirm",
                 "verified": False,
                 "attempts": 0,
-                "updated": now,
-            }
+            })
         return _reply(
             "owner_identity",
             f"You say you are {cfg.owner_name}. Are you my king?",
@@ -181,7 +263,7 @@ def handle_turn(
         if _YES_RE.match(text):
             with _LOCK:
                 session["stage"] = "verify"
-                session["updated"] = now
+                _save(key, session)
             return _reply(
                 "owner_identity",
                 "Then prove it. What is our phrase?",
@@ -211,12 +293,11 @@ def handle_turn(
         expected = normalise(cfg.owner_phrase)
         if expected and normalise(text) == expected:
             with _LOCK:
-                _SESSIONS[key] = {
+                _save(key, {
                     "stage": "verified",
                     "verified": True,
                     "attempts": 0,
-                    "updated": time.time(),
-                }
+                })
             return _reply(
                 "owner_identity",
                 f"Identity confirmed. Welcome back, my king. {cfg.owner_name} "
@@ -241,7 +322,7 @@ def handle_turn(
         left = _MAX_ATTEMPTS - attempts
         with _LOCK:
             session["attempts"] = attempts
-            session["updated"] = now
+            _save(key, session)
         return _reply(
             "owner_identity",
             f"That is not our phrase. {left} attempt(s) left, then I reset to "
