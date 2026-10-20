@@ -420,3 +420,5 @@ All consent grants, device registrations, location updates, and security events 
 - **ChirpStack** LoRaWAN integration
 - **Traccar** protocol compatibility
 - **Mosquitto** MQTT broker
+
+<!-- lau: owner session persistence verified 2026-10-20T06:28:22Z -->
