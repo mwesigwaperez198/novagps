@@ -1,0 +1,14 @@
+#!/usr/bin/env sh
+# LAU terminal client — reach the hosted agent from your shell.
+set -e
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+if [ -n "$PYTHON" ]; then
+  PY="$PYTHON"
+elif command -v python3 >/dev/null 2>&1; then
+  PY=python3
+else
+  PY=python
+fi
+PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH
+exec "$PY" -m nova_core.cli "$@"

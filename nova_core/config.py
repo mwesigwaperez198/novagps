@@ -87,6 +87,25 @@ class NovaCoreConfig:
     embedded_threads: int = field(default_factory=lambda: int(os.environ.get("NOVA_EMBEDDED_THREADS", "1")))
     mem_reserve_mb: int = field(default_factory=lambda: int(os.environ.get("NOVA_MEM_RESERVE_MB", "128")))
 
+    # Read-only cloud research. LAU may consult public sources when local tools
+    # cannot answer (missing capability, no local data). The rule is GET-only:
+    # no cookies, no credentials, no operator secrets leave the host, and no
+    # command fetched from a page is ever executed — it stays quoted data.
+    cloud_research: bool = field(default_factory=lambda: os.environ.get("NOVA_CLOUD_RESEARCH", "1") == "1")
+    cloud_max_sources: int = field(default_factory=lambda: int(os.environ.get("NOVA_CLOUD_MAX_SOURCES", "3")))
+    cloud_timeout: int = field(default_factory=lambda: int(os.environ.get("NOVA_CLOUD_TIMEOUT", "20")))
+    cloud_max_bytes: int = field(default_factory=lambda: int(os.environ.get("NOVA_CLOUD_MAX_BYTES", "1500000")))
+    search_provider: str = field(default_factory=lambda: (os.environ.get("NOVA_SEARCH_PROVIDER") or "duckduckgo").strip().lower())
+    search_api_key: str = field(default_factory=lambda: os.environ.get("NOVA_SEARCH_API_KEY", ""))
+    search_base_url: str = field(default_factory=lambda: (os.environ.get("NOVA_SEARCH_BASE_URL") or "").rstrip("/"))
+
+    # Owner confirmation: a conversational step-up layered ON TOP of the JWT,
+    # never a replacement for it. The phrase is normalised on both sides so
+    # "23rd December" and "23 december" are the same answer.
+    owner_name: str = field(default_factory=lambda: (os.environ.get("NOVA_OWNER_NAME") or "Perez").strip())
+    owner_phrase: str = field(default_factory=lambda: (os.environ.get("NOVA_OWNER_PHRASE") or "23rd December").strip())
+    owner_session_ttl: int = field(default_factory=lambda: int(os.environ.get("NOVA_OWNER_SESSION_TTL", "43200")))
+
     def ensure_dirs(self):
         self.vault_dir.mkdir(parents=True, exist_ok=True)
         for d in [self.base_dir, self.project_root, self.backend_dir]:

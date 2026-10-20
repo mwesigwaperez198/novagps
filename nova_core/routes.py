@@ -809,15 +809,21 @@ def _action(method: str, endpoint: str, *, risk: str = "standard", extract_body:
     }
 
 
-async def run_dispatch(command: str, device_id: str = "") -> dict:
+async def run_dispatch(command: str, device_id: str = "", principal=None) -> dict:
     """Shared LAU dispatch chain used by the HTTP endpoint and the terminal chat.
 
     Classifies the command, builds device/action payloads for backend intents,
     and routes everything else through the cognitive engine tool dispatch.
     Returns the same dict shape the /nova-core/agent/dispatch endpoint serves.
+
+    `principal` is the authenticated caller (viewer/auditor/operator/admin). It
+    is only used to key the owner-confirmation session — JWT auth still gates
+    every call, and the owner gate never grants a role.
     """
     command = (command or "").strip()
     device_id = device_id or ""
+    subject = getattr(principal, "subject", None)
+    role = getattr(principal, "role", None)
 
     try:
         prov = _get_provision_machine()
@@ -826,6 +832,17 @@ async def run_dispatch(command: str, device_id: str = "") -> dict:
             return provision_reply
     except Exception:
         pass
+
+    # Owner confirmation runs before any tool dispatch so a claim, a "yes", or
+    # the phrase is never swallowed by the intent classifier.
+    try:
+        from .owner import handle_turn as owner_handle_turn
+
+        owner_reply = owner_handle_turn(command, subject=subject, role=role)
+    except Exception:
+        owner_reply = None
+    if owner_reply is not None:
+        return owner_reply
 
     if _STRONG_HOSTILE.search(command):
         detected_hostile = _threat_scan(command)
@@ -1080,6 +1097,16 @@ async def run_dispatch(command: str, device_id: str = "") -> dict:
     tools = result.get("tools_executed", [])
     thought.append(f"Engine used: {result.get('engine_used', 'unknown')}")
     thought.append(f"Tools executed: {tools}")
+    sources = _research_sources(result.get("results") or {})
+    if sources:
+        thought.append(f"Cloud research cited {len(sources)} source(s)")
+    owner_state = {}
+    try:
+        from .owner import status as owner_status
+
+        owner_state = owner_status(subject, role)
+    except Exception:
+        owner_state = {}
     return {
         "thought_process": thought,
         "intent": intent["category"],
@@ -1088,12 +1115,36 @@ async def run_dispatch(command: str, device_id: str = "") -> dict:
         "latency_ms": result.get("duration_ms", 0),
         "tools_executed": tools,
         "results": result.get("results", {}),
+        "sources": sources,
+        "owner": owner_state,
     }
 
 
+def _research_sources(results: dict) -> list:
+    """Pull cited source URLs out of a cloud_research result, if one ran."""
+    entry = results.get("cloud_research")
+    if not isinstance(entry, dict) or not entry.get("success"):
+        return []
+    output = entry.get("output") or {}
+    if not isinstance(output, dict):
+        return []
+    out = []
+    for src in output.get("sources") or []:
+        if isinstance(src, dict) and src.get("url"):
+            out.append({
+                "title": src.get("title", ""),
+                "url": src.get("url", ""),
+                "fetched": bool(src.get("fetched")),
+            })
+    return out
+
+
 @nova_router.post("/agent/dispatch")
-async def nova_agent_dispatch(req: NovaAgentCommandRequest):
-    return await run_dispatch(req.command, req.device_id)
+async def nova_agent_dispatch(
+    req: NovaAgentCommandRequest,
+    principal=Depends(require_roles("viewer", "auditor", "operator", "admin")),
+):
+    return await run_dispatch(req.command, req.device_id, principal=principal)
 
 
 def _sse(event: str, data: dict) -> str:
@@ -1115,18 +1166,24 @@ async def _token_frames(text: str):
 
 
 @nova_router.post("/agent/stream")
-async def nova_agent_stream(req: NovaAgentCommandRequest):
+async def nova_agent_stream(
+    req: NovaAgentCommandRequest,
+    principal=Depends(require_roles("viewer", "auditor", "operator", "admin")),
+):
     """Streaming twin of /agent/dispatch for the conversational LAU UI."""
     async def event_stream():
         try:
             yield _sse("status", {"state": "thinking"})
-            result = await run_dispatch(req.command, req.device_id)
+            result = await run_dispatch(req.command, req.device_id, principal=principal)
 
             for index, thought in enumerate(result.get("thought_process") or []):
                 yield _sse("thought", {"index": index, "text": thought})
 
             for tool in result.get("tools_executed") or []:
                 yield _sse("tool", {"name": tool})
+
+            if result.get("sources"):
+                yield _sse("sources", {"items": result["sources"]})
 
             if result.get("action"):
                 yield _sse("action", result["action"])
@@ -1155,6 +1212,26 @@ async def nova_agent_stream(req: NovaAgentCommandRequest):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@nova_router.get("/owner/status")
+async def nova_owner_status(
+    principal=Depends(require_roles("viewer", "auditor", "operator", "admin")),
+):
+    """Who the caller currently is, as LAU sees it. Read-only, in-process."""
+    from .owner import status as owner_status
+
+    state = owner_status(getattr(principal, "subject", None), getattr(principal, "role", None))
+    state["authenticated_subject"] = getattr(principal, "subject", None)
+    return state
+
+
+@nova_router.get("/cloud/status")
+async def nova_cloud_status():
+    """Is read-only cloud research available, and through which provider?"""
+    from .tools.cloud import CloudResearchTool
+
+    return CloudResearchTool().preflight()
 
 
 class NovaSkillRunRequest(BaseModel):

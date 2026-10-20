@@ -203,7 +203,7 @@ export default function LAUHud({ isOpen, onClose, deviceId = "" }) {
       { id: `u-${Date.now()}`, role: "user", text, timestamp: clock() },
       {
         id: assistantId, role: "assistant", timestamp: clock(),
-        text: "", thoughts: [], tools: [], engine: null, streaming: true, action: null, results: null, error: null,
+        text: "", thoughts: [], tools: [], sources: [], engine: null, streaming: true, action: null, results: null, error: null,
       },
     ]);
 
@@ -215,6 +215,8 @@ export default function LAUHud({ isOpen, onClose, deviceId = "" }) {
             patchActive((m) => ({ thoughts: [...m.thoughts, data.text] }));
           } else if (event === "tool") {
             patchActive((m) => (m.tools.includes(data.name) ? {} : { tools: [...m.tools, data.name] }));
+          } else if (event === "sources") {
+            patchActive(() => ({ sources: data.items || [] }));
           } else if (event === "action") {
             patchActive(() => ({ action: data }));
           } else if (event === "token") {
@@ -339,6 +341,22 @@ export default function LAUHud({ isOpen, onClose, deviceId = "" }) {
                     )}
 
                     {m.streaming && m.text && <span className="lau-caret" />}
+
+                    {m.sources?.length > 0 && (
+                      <div className="lau-sources">
+                        <div className="lau-sources-title">Sources</div>
+                        <ul className="lau-sources-list">
+                          {m.sources.map((s) => (
+                            <li key={s.url}>
+                              <a href={s.url} target="_blank" rel="noopener noreferrer">
+                                {s.title || s.url}
+                              </a>
+                              {s.fetched === false && <span className="lau-sources-tag">snippet</span>}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
 
                     {m.action && (
                       <button

@@ -49,6 +49,26 @@ services:
         value: openai/gpt-oss-120b
       - key: NOVA_AGENT_NAME
         value: LAU
+      # Read-only cloud research: LAU consults public sources when local tools
+      # cannot answer, GET-only, with an SSRF guard and robots.txt respected.
+      # Default provider needs no key; set NOVA_SEARCH_API_KEY (dashboard secret)
+      # and NOVA_SEARCH_PROVIDER=brave|tavily|serper for full web coverage, or
+      # point NOVA_SEARCH_BASE_URL at a self-hosted SearXNG.
+      - key: NOVA_CLOUD_RESEARCH
+        value: "1"
+      - key: NOVA_SEARCH_PROVIDER
+        value: duckduckgo
+      - key: NOVA_SEARCH_API_KEY
+        sync: false
+      - key: NOVA_SEARCH_BASE_URL
+        sync: false
+      # Owner-confirmation ritual. Ceremonial step-up only — JWT auth still
+      # gates every call. Set NOVA_OWNER_PHRASE as a dashboard secret if you want
+      # something other than the code default; it is never echoed or logged.
+      - key: NOVA_OWNER_NAME
+        value: Perez
+      - key: NOVA_OWNER_PHRASE
+        sync: false
       - key: NOVA_EMBEDDED_CTX
         value: "512"
       - key: NOVA_EMBEDDED_TOKENS

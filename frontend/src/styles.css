@@ -2892,6 +2892,50 @@ select {
   animation: lau-blink 1s steps(1) infinite;
 }
 
+.lau-sources {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--cyan-soft);
+  animation: lau-pop .3s ease both;
+}
+.lau-sources-title {
+  font-size: 8.5px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--cyan);
+  opacity: 0.85;
+  margin-bottom: 4px;
+}
+.lau-sources-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.lau-sources-list li {
+  font-size: 11px;
+  line-height: 1.35;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.lau-sources-list a {
+  color: var(--cyan);
+  text-decoration: none;
+  border-bottom: 1px dotted var(--cyan-soft);
+  word-break: break-all;
+}
+.lau-sources-list a:hover { border-bottom-style: solid; }
+.lau-sources-tag {
+  font-size: 8px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--line-hot);
+  opacity: 0.7;
+}
+
 .lau-md-p { margin: 0 0 6px; }
 .lau-md-p:last-child { margin-bottom: 0; }
 .lau-md-h1, .lau-md-h2, .lau-md-h3 {
