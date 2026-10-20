@@ -108,6 +108,28 @@ export default function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [lauOpen]);
 
+  useEffect(() => {
+    const PANEL_ALIASES = {
+      alerts: "alerts",
+      logs: "logs",
+      osint: "osint",
+      wifi: "wifi",
+      devices: "discovery",
+      net: "net",
+      camera: "camera",
+      map: "net",
+      lau: null,
+    };
+    const handleControl = (e) => {
+      const control = e?.detail;
+      if (!control || control.control !== "open_panel") return;
+      const target = PANEL_ALIASES[control.panel] ?? null;
+      if (target) setActivePanel(target);
+    };
+    window.addEventListener("nova-ui-control", handleControl);
+    return () => window.removeEventListener("nova-ui-control", handleControl);
+  }, []);
+
   const selectedDevice = useMemo(
     () => devices.find((device) => device.id === selectedDeviceId) || devices[0],
     [devices, selectedDeviceId],

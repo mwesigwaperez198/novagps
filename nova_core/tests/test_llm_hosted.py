@@ -187,3 +187,95 @@ async def test_hosted_path_runs_model_chosen_tool_and_keeps_target(monkeypatch):
     assert executed == [("port_scan", {"host": "192.168.1.6"})]
     assert results["llm_response"]["success"] is True
     assert "Port 22" in results["llm_response"]["output"]
+
+
+@pytest.mark.asyncio
+async def test_empty_tool_choice_does_not_trigger_cloud(monkeypatch):
+    """An ordinary sentence the model cannot map must NOT become a web search."""
+    from nova_core import brain as brain_mod
+    from nova_core.brain import NovaBrain
+
+    monkeypatch.setattr(brain_mod, "cloud_enabled", lambda: True)
+
+    brain = NovaBrain.__new__(NovaBrain)
+    executed = []
+
+    class _Registry:
+        def list_tools(self):
+            return [{"name": "port_scan", "description": "Scan ports"}]
+
+        def execute(self, name, **params):
+            executed.append(name)
+
+            class R:
+                def to_dict(self):
+                    return {"success": True, "output": {}}
+
+            return R()
+
+    class _LLM:
+        def select_tool(self, query, desc):
+            return []
+
+        def chat(self, system, prompt, temperature=0.3, num_predict=900):
+            return True, "Noted."
+
+    brain.tools = _Registry()
+    brain.llm = _LLM()
+    brain._system_prompt = "sys"
+    brain._parse_request = lambda q: {"intent": "execute", "actions": []}
+
+    await brain._process_with_hosted_llm("am perez", [], {})
+    assert "cloud_research" not in executed
+    assert "web_search" not in executed
+
+
+@pytest.mark.asyncio
+async def test_research_shaped_query_still_escalates(monkeypatch):
+    from nova_core import brain as brain_mod
+    from nova_core.brain import NovaBrain
+
+    monkeypatch.setattr(brain_mod, "cloud_enabled", lambda: True)
+    monkeypatch.setattr(brain_mod, "is_research_query", lambda q: True)
+
+    brain = NovaBrain.__new__(NovaBrain)
+    executed = []
+
+    class _Registry:
+        def list_tools(self):
+            return [{"name": "cloud_research", "description": "web"}]
+
+        def execute(self, name, **params):
+            executed.append(name)
+
+            class R:
+                def to_dict(self):
+                    return {"success": True, "output": {"sources": []}}
+
+            return R()
+
+    class _LLM:
+        def select_tool(self, query, desc):
+            return []
+
+        def is_hosted(self):
+            return True
+
+        def is_available(self):
+            return True
+
+        def chat(self, system, prompt, temperature=0.3, num_predict=900):
+            return True, "answered"
+
+    brain.tools = _Registry()
+    brain.llm = _LLM()
+    brain.engine = types.SimpleNamespace(engine_used="UNINITIALIZED", state="shield_only")
+    brain._system_prompt = "sys"
+    brain._parse_request = lambda q: {"intent": "execute", "actions": []}
+    brain.memory = types.SimpleNamespace(
+        get_recent_lessons=lambda **kw: [],
+        record_lesson=lambda *a, **kw: None,
+    )
+
+    await brain._process_with_hosted_llm("what is the latest CVE for nginx", [], {})
+    assert "cloud_research" in executed

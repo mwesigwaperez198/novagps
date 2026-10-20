@@ -308,6 +308,45 @@ class NovaBrain:
             return prompt_path.read_text()
         return f"You are {self.agent_name}, the security agent of NOVA-CORE for NovaGPS."
 
+    def _identity_anchor(self, principal: Optional[str] = None) -> str:
+        """Re-state who she is, who is talking, and the open task every turn.
+
+        Keeps her from drifting off-role or forgetting the job mid-conversation.
+        The goal list is durable (vault-backed) when memory is available.
+        """
+        lines = [
+            f"You are {getattr(self, 'agent_name', 'LAU')}, the NOVARA queen agent seated at this machine.",
+            "You act on this system the way an operator at the keyboard would: if the",
+            "task is a system or dashboard action, you do it, not research it.",
+        ]
+        try:
+            if principal:
+                lines.append(f"Speaking with: {principal}.")
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            task = (self.context.current_task or "").strip()
+            if task:
+                lines.append(f"Current task: {task}")
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            goals = self.memory.list_goals("active")[:5]
+        except Exception:  # noqa: BLE001
+            goals = []
+        if goals:
+            joined = "; ".join(
+                str(g.get("title") or g.get("goal") or g.get("description") or "")[:80]
+                for g in goals
+            )
+            lines.append(f"Active goals (stay on these): {joined}")
+        lines.append(
+            "Never fabricate results. Never answer a system action by searching the "
+            "web. If you cannot do something on this system, say so plainly and name "
+            "the closest thing you can do."
+        )
+        return "\n".join(lines)
+
     async def process_query(self, query: str) -> dict:
         start = time.time()
 
@@ -506,14 +545,14 @@ class NovaBrain:
             if name and name not in ordered:
                 ordered.append(name)
 
-        # Cloud escalation: when nothing local can answer, or every local tool
-        # failed, consult public sources read-only instead of guessing.
+        # Cloud is a security-facing tool, not a catch-all oracle. Consult it
+        # ONLY when the request is genuinely a look-up of outside knowledge, or
+        # the operator explicitly asked for the web. An empty tool selection on
+        # an ordinary sentence ("am perez") must never become a web search.
         cloud_on = cloud_enabled()
         research_planned = any(t in ordered for t in ("cloud_research", "web_search"))
-        if cloud_on and not research_planned and (
-            is_research_query(query)
-            or not ordered
-        ):
+        wants_web = bool(_WEB_ONLY_RE.search(query))
+        if cloud_on and not research_planned and (is_research_query(query) or wants_web):
             ordered.append("cloud_research")
             params_by_tool.setdefault("cloud_research", {"query": query})
 
@@ -555,7 +594,7 @@ class NovaBrain:
             default=str,
         )[:1800]
         ok, answer = await loop.run_in_executor(None, lambda: self.llm.chat(
-            system=self._system_prompt,
+            system=self._system_prompt + "\n\n" + self._identity_anchor(),
             prompt=(
                 f"The operator asked: {query}\n\n"
                 f"Tools ran: {ordered or 'none'}\n"
@@ -842,6 +881,28 @@ class NovaBrain:
         for phrase, tool_name in tool_mappings.items():
             if phrase in query_lower:
                 self._append_actions(actions, self._dispatch_action(tool_name, query, query_lower))
+
+        # "not on our network / different internet" beats the generic nearby
+        # mapping: those devices are off-network, so read them via the radio
+        # sniffer or the remote bridge rather than a LAN sweep.
+        off_network = any(p in query_lower for p in (
+            "not the same internet", "not the same network", "not same internet",
+            "not same network", "different internet", "different network",
+            "different wifi", "different wi-fi", "not connected to this wifi",
+            "not on our network", "not even near", "not near us", "not nearby",
+        ))
+        if off_network:
+            actions = [
+                a for a in actions
+                if a.get("tool") not in ("network_discovery", "remote_bridge", "radio_sniffer")
+            ]
+            prefer_remote = any(p in query_lower for p in (
+                "remote", "different internet", "different network",
+                "different wifi network", "different wi-fi network", "telemetry",
+                "not even near", "not near us",
+            ))
+            chosen = "remote_bridge" if prefer_remote else "radio_sniffer"
+            self._append_actions(actions, {"tool": chosen, "params": {}})
 
         if not actions:
             for scored_tool in self._score_intents(query_lower):
@@ -1156,14 +1217,13 @@ class NovaBrain:
                 parts.append(str(llm_resp.get("output", "")).strip())
             else:
                 # Reasoning engine failed (offline, timeout, overloaded machine).
-                # Don't leak the raw error to the operator — answer as herself
-                # and honestly note the fallback.
-                logger.warning("LLM failed (%s); falling back to persona response", llm_resp.get("error"))
-                parts.append(
-                    self.compose_dynamic_response(query)
-                    + "\n(My reasoning engine is struggling to spin up — I answered from my "
-                      "grounded core so you're never left hanging. Try again in a moment.)"
-                )
+                # Never leave the operator hanging and never leak a raw error:
+                # ground the answer in whatever the tools actually returned, or
+                # answer plainly as herself.
+                logger.warning("LLM failed (%s); grounding the answer locally", llm_resp.get("error"))
+                grounded = self._grounded_fallback(query, results)
+                if grounded:
+                    parts.append(grounded)
 
         if "_reasoning" in results:
             only_reasoning = len(results) == 1
@@ -1240,6 +1300,30 @@ class NovaBrain:
             unique = list(dict.fromkeys(fixes))
             note += " Quick wins: " + "; ".join(unique) + "."
         return "\n\n" + note
+
+    def _grounded_fallback(self, query: str, results: dict) -> str:
+        """A truthful answer when the hosted model is unavailable.
+
+        Built from what actually ran — never a canned 'engine is warming up'
+        excuse. If nothing ran, say plainly what she is and offer the next move.
+        """
+        live = {
+            k: v for k, v in (results or {}).items()
+            if isinstance(v, dict) and v.get("success")
+        }
+        if live:
+            parts = ["Here is what I have so far — reasoning engine offline, so this is the raw result:"]
+            for tool_name, result in live.items():
+                output = result.get("output", {})
+                if isinstance(output, dict):
+                    formatted = self._format_output(tool_name, output)
+                    if formatted:
+                        parts.append(f"**{tool_name}:** {formatted}")
+                elif output:
+                    parts.append(f"**{tool_name}:** {output}")
+            if len(parts) > 1:
+                return "\n".join(parts)
+        return self.compose_dynamic_response(query)
 
     def _conversational_response(self, query: str) -> str:
         return self.compose_dynamic_response(query)

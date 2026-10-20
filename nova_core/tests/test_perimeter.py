@@ -241,6 +241,54 @@ class TestDeterministicRouting:
         parsed = NovaBrain()._parse_request("show me the tracking logic for location of devices")
         assert "location_engine" in [a["tool"] for a in parsed["actions"]]
 
+    def test_different_network_not_polluted_by_network_discovery(self):
+        from nova_core.brain import NovaBrain
+        parsed = NovaBrain()._parse_request(
+            "scan ports of nearby devices but not the same internet")
+        tools = [a["tool"] for a in parsed["actions"]]
+        assert "network_discovery" not in tools
+        assert any(t in tools for t in ("radio_sniffer", "remote_bridge"))
+
+    def test_off_network_radio_case_has_no_duplicates(self):
+        from nova_core.brain import NovaBrain
+        parsed = NovaBrain()._parse_request(
+            "what nearby devices are not connected to this wifi")
+        tools = [a["tool"] for a in parsed["actions"]]
+        assert tools.count("radio_sniffer") == 1
+
+
+class TestSystemControlIntent:
+    def test_map_to_satellite_is_system_control(self):
+        intent = routes._classify_intent("change the nova map view to satellite")
+        assert intent["category"] == "system_control"
+
+    def test_nova_map_switch_is_system_control(self):
+        intent = routes._classify_intent("i mean nova, switch our map view to satellite")
+        assert intent["category"] == "system_control"
+
+    def test_ui_control_satellite(self):
+        control = routes._ui_control("switch our map to satellite view")
+        assert control["control"] == "map_view"
+        assert control["view"] == "satellite"
+
+    def test_ui_control_panel(self):
+        control = routes._ui_control("open the alerts panel")
+        assert control["control"] == "open_panel"
+        assert control["panel"] == "alerts"
+
+    def test_ui_control_no_match_is_none(self):
+        assert routes._ui_control("what is a satellite orbit") is None
+
+    def test_dispatch_system_control_never_uses_cloud(self, tmp_path, monkeypatch):
+        machine = LauSovereignStateMachine(store=str(tmp_path / "sc.json"))
+        machine.reset()
+        monkeypatch.setattr(routes, "_get_provision_machine", lambda: machine)
+        out = run_dispatch("switch our map view to satellite")
+        assert out["intent"] == "system_control"
+        assert out["ui_control"]["view"] == "satellite"
+        assert "cloud_research" not in (out.get("tools_executed") or [])
+
+
 class TestStolenTrackIntent:
     def test_stolen_phone_with_imei_builds_watchlist_action(self, tmp_path, monkeypatch):
         machine = LauSovereignStateMachine(store=str(tmp_path / "stolen.json"))

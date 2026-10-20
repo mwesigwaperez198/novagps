@@ -219,6 +219,9 @@ export default function LAUHud({ isOpen, onClose, deviceId = "" }) {
             patchActive(() => ({ sources: data.items || [] }));
           } else if (event === "action") {
             patchActive(() => ({ action: data }));
+          } else if (event === "ui_control") {
+            window.dispatchEvent(new CustomEvent("nova-ui-control", { detail: data }));
+            patchActive(() => ({ uiControl: data }));
           } else if (event === "token") {
             patchActive((m) => ({ text: m.text + data.text }));
           } else if (event === "done") {

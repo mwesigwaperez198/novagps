@@ -679,6 +679,12 @@ async def nova_shield_emit(req: NovaShieldEmitRequest):
 
 
 _INTENT_MAP = [
+    ("system_control", ["map view", "map to satellite", "satellite view", "satellite map",
+                         "change the map", "switch the map", "switch to satellite",
+                         "change view", "switch view", "zoom in", "zoom out",
+                         "open the panel", "show the panel", "go to the", "navigate to",
+                         "dashboard", "our map", "nova map", "change our system",
+                         "change the system", "the nova system", "our system"]),
     ("system_health", ["system health", "analyze system", "health check", "check health",
                         "system status", "server status", "system info"]),
     ("port_scan", ["port scan", "open ports", "scan ports", "check ports"]),
@@ -748,6 +754,60 @@ def _classify_intent(command):
         if any(p in c for p in patterns):
             return {"category": category, "confidence": "high"}
     return {"category": "general", "confidence": "medium"}
+
+
+def _ui_control(command: str) -> dict | None:
+    """Interpret a command as a control on the NOVA interface itself.
+
+    LAU sits at this machine like an operator: when asked to change the view or
+    open a panel, she drives the dashboard rather than searching the web. The
+    frontend consumes this contract (lang/keys are stable).
+    """
+    c = command.lower()
+    control_verb = any(v in c for v in (
+        "change", "switch", "set ", "show", "open", "go to", "navigate",
+        "turn on", "turn off", "view", "display", "activate", "use ",
+    ))
+    mentions_map = any(m in c for m in ("map", "globe", "panel", "dashboard", "view"))
+    if not (control_verb or mentions_map):
+        return None
+    view = None
+    if any(p in c for p in ("satellite", "satelite", "satalite", "sat view")):
+        view = "satellite"
+    elif any(p in c for p in ("street", "road view", "normal view", "map view back")):
+        view = "streets"
+    elif "terrain" in c or "topo" in c:
+        view = "terrain"
+
+    panel = None
+    for key, aliases in (
+        ("map", ("map", "globe")),
+        ("devices", ("device list", "registered devices", "device panel")),
+        ("alerts", ("alert",)),
+        ("logs", ("log panel", "system logs", "logs")),
+        ("lau", ("agent panel", "lau panel", "the agent")),
+        ("osint", ("osint",)),
+        ("wifi", ("wifi", "wi-fi")),
+    ):
+        if any(a in c for a in aliases):
+            panel = key
+            break
+
+    if view:
+        return {
+            "control": "map_view",
+            "view": view,
+            "panel": panel or "map",
+            "label": f"switching the map to {view} view",
+        }
+    if panel:
+        return {
+            "control": "open_panel",
+            "panel": panel,
+            "view": view,
+            "label": f"opening the {panel} panel",
+        }
+    return None
 
 
 def _grounding_steps(command: str, intent: dict) -> list:
@@ -1035,6 +1095,34 @@ async def run_dispatch(command: str, device_id: str = "", principal=None) -> dic
             "action": _action("POST", f"/vehicle/stolen-report?device_id={device_id}", risk="high"),
         }
 
+    if intent["category"] == "system_control":
+        control = _ui_control(command)
+        if control is None:
+            return {
+                "thought_process": thought + [
+                    "Read that as a request to drive the NOVA interface.",
+                    "No matching view or panel toggle — asking for the exact control.",
+                ],
+                "intent": intent["category"],
+                "response": (
+                    "That reads like a control for our own interface, but I did not catch "
+                    "which view you want. Say the view or panel by name — for example "
+                    "\"switch the map to satellite\", \"open the alerts panel\", or "
+                    "\"show registered devices\"."
+                ),
+            }
+        return {
+            "thought_process": thought + [
+                f"Read that as controlling our own interface: {control['label']}.",
+                "This is a UI action on this system — acting on it here, not researching it.",
+                f"Dispatching a '{control['control']}' control to the dashboard.",
+            ],
+            "intent": intent["category"],
+            "response": f"On it — {control['label']}.",
+            "ui_control": control,
+            "action": _action("POST", "/nova-core/agent/ui-control", risk="ui"),
+        }
+
     if intent["category"] == "engine_report":
         thought.append("Pulling self-diagnostic engine report")
         return {
@@ -1147,6 +1235,22 @@ async def nova_agent_dispatch(
     return await run_dispatch(req.command, req.device_id, principal=principal)
 
 
+@nova_router.post("/agent/ui-control")
+async def nova_agent_ui_control(
+    req: NovaAgentCommandRequest,
+    principal=Depends(require_roles("viewer", "auditor", "operator", "admin")),
+):
+    """Echo the interface control LAU derived for a command.
+
+    The dashboard applies this to its own view state. The server keeps no
+    authority here — it only confirms which control the operator asked for.
+    """
+    control = _ui_control(req.command or "")
+    if control is None:
+        return {"applied": False, "control": None}
+    return {"applied": True, "control": control}
+
+
 def _sse(event: str, data: dict) -> str:
     """One Server-Sent Event frame. Kept tiny so the browser can parse it raw."""
     return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
@@ -1187,6 +1291,9 @@ async def nova_agent_stream(
 
             if result.get("action"):
                 yield _sse("action", result["action"])
+
+            if result.get("ui_control"):
+                yield _sse("ui_control", result["ui_control"])
 
             async for piece in _token_frames(result.get("response", "")):
                 yield _sse("token", {"text": piece})

@@ -309,6 +309,16 @@ class NovaLLM:
 Return ONLY a JSON array of tool names. Example: ["port_scan", "system_info"]
 If no tools are relevant, return [].
 
+Choose tools by intent, not by keyword alone. A few cases that commonly come up:
+- A device on a DIFFERENT network / not physically near us / remote telemetry -> remote_bridge
+- Devices physically nearby but NOT on our Wi-Fi (probe requests, BLE, radio) -> radio_sniffer
+- Location math, RSSI-to-distance, NMEA/GPRMC tracking logic -> location_engine
+- Identify what an IP/host belongs to (registered device vs reverse DNS) -> host_identify
+- Devices on our OWN router/Wi-Fi, gateway, ARP neighbours -> network_discovery
+- A verified stolen phone / watch an IMEI -> device_lookup
+Rules: never call cloud_research or web_search for a system or interface action; leave the
+array empty when no local tool fits rather than guessing.
+
 User request: {query}
 
 Available tools:
